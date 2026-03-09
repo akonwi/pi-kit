@@ -635,6 +635,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
   let threadIndex: SessionInfoLite[] = [];
   let bashHistory: string[] = [];
   let builtInCommands: string[] = [...FALLBACK_BUILT_IN_COMMANDS];
+  let installedEditorSessionId: string | undefined;
 
   const normalizeBashCommand = (raw: string): string => {
     const text = (raw || "").trim();
@@ -739,12 +740,25 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     });
   };
 
-  pi.on("session_start", async (_event, ctx) => {
+  const ensureEditorInstalled = async (ctx: any): Promise<void> => {
+    if (!ctx.hasUI) return;
+    const sid = ctx.sessionManager?.getSessionId?.();
+    if (sid && installedEditorSessionId === sid) return;
     await installThreadAtEditor(ctx);
+    installedEditorSessionId = sid;
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    await ensureEditorInstalled(ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
-    await installThreadAtEditor(ctx);
+    await ensureEditorInstalled(ctx);
+  });
+
+  // Defensive: in some reload flows the editor hook may not reattach until a turn starts.
+  pi.on("agent_start", async (_event, ctx) => {
+    await ensureEditorInstalled(ctx);
   });
 
   pi.on("user_bash", async (event, ctx) => {
