@@ -16,7 +16,8 @@
       "./extensions/protected-paths.ts",
       "./extensions/pi-kit.ts",
       "./extensions/thread-references.ts",
-      "./extensions/subagent/index.ts"
+      "./extensions/subagent/index.ts",
+      "./extensions/claude-commands.ts"
     ],
     "prompts": ["./prompts"],
     "themes": ["./themes"]
