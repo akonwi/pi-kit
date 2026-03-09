@@ -1,0 +1,29 @@
+{
+  "name": "@akonwi/pi-kit",
+  "version": "0.3.0",
+  "description": "Pi customization pack (Amp/OpenCode-like UX, thread tooling, alerts, and Ard subagent support).",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "files": [
+    "extensions",
+    "prompts",
+    "themes",
+    "agents",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/protected-paths.ts",
+      "./extensions/pi-kit.ts",
+      "./extensions/thread-references.ts",
+      "./extensions/subagent/index.ts"
+    ],
+    "prompts": ["./prompts"],
+    "themes": ["./themes"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}
