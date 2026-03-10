@@ -1063,7 +1063,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             thinkingLevel === "high" ? "🔥" :
             thinkingLevel === "medium" ? "💡" :
             thinkingLevel === "low" ? "💤" : "⛔";
-          const row2Left = theme.fg("dim", `${modelId} • ${thinkingEmoji} • 🪟 ${contextPct}`);
+          const row2Left = theme.fg("dim", `${modelId} -- ${thinkingEmoji} -- 🪟 ${contextPct}`);
           const row2Right = theme.fg("dim", "");
 
           const footerPadX = 1;
