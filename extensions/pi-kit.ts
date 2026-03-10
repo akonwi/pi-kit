@@ -1038,9 +1038,11 @@ export default function piKitExtension(pi: ExtensionAPI): void {
         invalidate() {},
         render(width: number): string[] {
           const home = homedir();
-          const cwd = typeof ctx.cwd === "string" && ctx.cwd.startsWith(home)
+          const cwdBase = typeof ctx.cwd === "string" && ctx.cwd.startsWith(home)
             ? `~${ctx.cwd.slice(home.length)}`
             : (ctx.cwd || "");
+          const gitBranch = footerData.getGitBranch?.();
+          const cwd = gitBranch ? `${cwdBase} (${gitBranch})` : cwdBase;
           const sessionName = deriveFooterSessionLabel(ctx);
           const row1Left = theme.fg("muted", `${cwd} • ${sessionName}`);
           const row1Right = theme.fg("dim", renderStatus(currentConfig));
@@ -1063,7 +1065,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             thinkingLevel === "high" ? "🔥" :
             thinkingLevel === "medium" ? "💡" :
             thinkingLevel === "low" ? "💤" : "⛔";
-          const row2Left = theme.fg("dim", `${modelId}-${thinkingEmoji}-🪟${contextPct}`);
+          const row2Left = theme.fg("dim", `${modelId}-${thinkingEmoji} 🪟${contextPct}`);
           const row2Right = theme.fg("dim", "");
 
           const footerPadX = 1;
