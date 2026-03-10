@@ -2,10 +2,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { SessionManager, getMarkdownTheme, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { Input, Key, matchesKey, truncateToWidth as tuiTruncateToWidth } from "@mariozechner/pi-tui";
+import { Input, Key, Markdown, matchesKey, truncateToWidth as tuiTruncateToWidth } from "@mariozechner/pi-tui";
 
 type KitConfig = {
   bells: {
@@ -47,6 +47,15 @@ const lastAutoTitleAttemptBySession = new Map<string, number>();
 const AUTO_TITLE_COOLDOWN_MS = 4 * 60 * 1000;
 const AUTO_TITLE_MIN_USER_MESSAGES = 2;
 const AUTO_TITLE_DISABLED = process.env.PI_KIT_NO_AUTO_TITLE === "1";
+const LONGFORM_MIN_CHARS = 900;
+const LONGFORM_MAX_SECTIONS = 12;
+const LONGFORM_SECTION_MAX_CHARS = 1200;
+const LONGFORM_WIDGET_MAX_LINES = 16;
+
+type LongFormSection = {
+  title: string;
+  body: string;
+};
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -384,16 +393,6 @@ function normalizeQuestion(raw: GuidedQuestion, index: number): GuidedQuestion {
   };
 }
 
-function formatQuestionPrompt(q: GuidedQuestion, i: number, total: number, title?: string): string {
-  const parts = [
-    title ? `${title}` : "Guided questionnaire",
-    `Question ${i + 1}/${total}`,
-    q.label,
-  ];
-  if (q.help) parts.push(q.help);
-  return parts.join("\n");
-}
-
 function extractQuestionsFromAssistantText(text: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -464,6 +463,87 @@ function buildWizardFromLastAssistant(ctx: any): GuidedQuestionnaireInput | null
     intro: "Answer the assistant's pending questions using the wizard.",
     questions,
   };
+}
+
+function splitLongFormSections(text: string): LongFormSection[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+
+  const headingChunks = normalized
+    .split(/\n(?=#+\s+)/g)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+
+  const sections: LongFormSection[] = [];
+
+  const pushSection = (title: string, body: string) => {
+    const cleanBody = body.trim();
+    if (!cleanBody) return;
+    sections.push({
+      title: clip(title.trim() || "Section", 64),
+      body: clip(cleanBody, LONGFORM_SECTION_MAX_CHARS),
+    });
+  };
+
+  const candidateBlocks = headingChunks.length > 1 ? headingChunks : normalized.split(/\n\n+/g);
+
+  for (let idx = 0; idx < candidateBlocks.length; idx++) {
+    const block = candidateBlocks[idx].trim();
+    if (!block) continue;
+
+    const lines = block.split("\n");
+    const first = lines[0]?.trim() || "";
+    const isHeading = /^#+\s+/.test(first);
+
+    if (isHeading) {
+      const title = first.replace(/^#+\s+/, "").trim() || `Section ${idx + 1}`;
+      pushSection(title, lines.slice(1).join("\n"));
+    } else {
+      const sentence = block.replace(/\s+/g, " ").match(/^[^.!?\n]{4,80}[.!?]?/)?.[0]?.trim() || `Section ${idx + 1}`;
+      pushSection(sentence, block);
+    }
+
+    if (sections.length >= LONGFORM_MAX_SECTIONS) break;
+  }
+
+  if (sections.length <= 1) {
+    const paragraphs = normalized.split(/\n\n+/g).map((p) => p.trim()).filter(Boolean);
+    const chunked: LongFormSection[] = [];
+    let cursor = 0;
+    while (cursor < paragraphs.length && chunked.length < LONGFORM_MAX_SECTIONS) {
+      let body = "";
+      while (cursor < paragraphs.length && `${body}\n\n${paragraphs[cursor]}`.trim().length <= LONGFORM_SECTION_MAX_CHARS) {
+        body = `${body}\n\n${paragraphs[cursor]}`.trim();
+        cursor += 1;
+      }
+      const title = body.match(/^[^.!?\n]{4,70}/)?.[0]?.trim() || `Section ${chunked.length + 1}`;
+      if (body) chunked.push({ title, body });
+      if (!body) cursor += 1;
+    }
+    return chunked.length > 0 ? chunked : sections;
+  }
+
+  return sections;
+}
+
+function buildLongFormPagerFromLastAssistant(ctx: any): LongFormSection[] | null {
+  const branch = Array.isArray(ctx.sessionManager?.getBranch?.()) ? ctx.sessionManager.getBranch() : [];
+  let lastAssistant: AgentMessage | undefined;
+
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i];
+    if (!entry || entry.type !== "message" || !entry.message || entry.message.role !== "assistant") continue;
+    lastAssistant = entry.message as AgentMessage;
+    break;
+  }
+
+  if (!lastAssistant) return null;
+
+  const text = messageText(lastAssistant).trim();
+  if (!text || text.length < LONGFORM_MIN_CHARS) return null;
+
+  const sections = splitLongFormSections(text);
+  return sections.length >= 2 ? sections : null;
 }
 
 async function runGuidedQuestionnaire(
@@ -837,6 +917,111 @@ async function runGuidedQuestionnaire(
 
 export default function piKitExtension(pi: ExtensionAPI): void {
   let currentConfig: KitConfig = sanitizeConfig(DEFAULT_CONFIG);
+  let activePagerOverlay: { setHidden: (h: boolean) => void; hide: () => void } | null = null;
+
+  function openLongFormPager(ctx: any, sections: LongFormSection[], startIndex = 0): void {
+    if (!ctx.hasUI || sections.length < 2) return;
+
+    if (activePagerOverlay) {
+      activePagerOverlay.hide();
+      activePagerOverlay = null;
+    }
+
+    ctx.ui.custom<void>(
+      (tui, theme, _kb, done) => {
+        let index = Math.max(0, Math.min(sections.length - 1, startIndex));
+
+        return {
+          handleInput(data: string): void {
+            if (matchesKey(data, Key.escape)) {
+              done();
+              return;
+            }
+            if (matchesKey(data, Key.right) || matchesKey(data, Key.ctrl("shift+right"))) {
+              if (index < sections.length - 1) index += 1;
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.left) || matchesKey(data, Key.ctrl("shift+left"))) {
+              if (index > 0) index -= 1;
+              tui.requestRender();
+              return;
+            }
+          },
+
+          render(width: number): string[] {
+            const inside = Math.max(24, width - 2);
+            const section = sections[index]!;
+
+            const stripAnsi = (s: string) => s
+              .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+              .replace(/\x1b_[\s\S]*?(?:\x07|\x1b\\)/g, "")
+              .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+              .replace(/[\x00-\x1F\x7F]/g, "");
+            const fit = (s: string) => {
+              const truncated = tuiTruncateToWidth(s, inside);
+              const plain = stripAnsi(truncated);
+              return plain.length >= inside ? truncated : `${truncated}${" ".repeat(inside - plain.length)}`;
+            };
+            const bc = (s: string) => theme.fg("borderAccent", s);
+            const row = (content = "") => `${bc("│")}${fit(content)}${bc("│")}`;
+
+            const dots = sections
+              .map((_, idx) => idx === index ? theme.fg("accent", "●") : theme.fg("dim", "○"))
+              .join(" ");
+
+            const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
+              color: (text: string) => theme.fg("text", text),
+            });
+            const bodyLines = md.render(Math.max(12, inside - 4));
+
+            const termRows = process.stdout.rows || 40;
+            const reservedForComposer = 7;
+            const availableRows = Math.max(12, termRows - reservedForComposer);
+
+            const content = [
+              `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
+              row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length}`))),
+              row(`${dots}`),
+              row(theme.fg("text", section.title)),
+              row(),
+              ...bodyLines.map((line) => row(` ${line}`)),
+              row(),
+              row(theme.fg("dim", "← previous • → next • Esc close")),
+            ];
+
+            while (content.length < availableRows - 1) {
+              content.push(row());
+            }
+
+            content.push(`${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`);
+            return content;
+          },
+
+          invalidate(): void {},
+        };
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          width: "100%",
+          height: "100%",
+          anchor: "top-left" as any,
+          margin: { top: 0, right: 0, bottom: 0, left: 0 },
+        },
+        onHandle: (handle) => {
+          activePagerOverlay = handle;
+        },
+      },
+    );
+  }
+
+  function closeLongFormPager(_ctx: any): void {
+    if (activePagerOverlay) {
+      activePagerOverlay.hide();
+      activePagerOverlay = null;
+    }
+  }
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!ctx.hasUI) return;
@@ -922,7 +1107,10 @@ export default function piKitExtension(pi: ExtensionAPI): void {
 
   pi.on("session_switch", async (_event, ctx) => {
     await refreshStatus(ctx);
+    closeLongFormPager(ctx);
   });
+
+
 
   pi.registerCommand("bells", {
     description: "Toggle bells: /bells on|off|toggle",
@@ -1060,6 +1248,27 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("pager", {
+    description: "Open long-form pager for last assistant response: /pager [off]",
+    handler: async (args, ctx) => {
+      const action = String(args || "").trim().toLowerCase();
+
+      if (action === "off" || action === "hide" || action === "close") {
+        closeLongFormPager(ctx);
+        ctx.ui.notify("Pager closed.", "info");
+        return;
+      }
+
+      const sections = buildLongFormPagerFromLastAssistant(ctx);
+      if (!sections) {
+        ctx.ui.notify("No long assistant response found to paginate.", "warning");
+        return;
+      }
+
+      openLongFormPager(ctx, sections, 0);
+    },
+  });
+
   pi.registerCommand("wizard", {
     description: "Run guided questions from last assistant message (use --demo for sample)",
     handler: async (args, ctx) => {
@@ -1120,6 +1329,16 @@ export default function piKitExtension(pi: ExtensionAPI): void {
         (typeof lastAssistant.errorMessage === "string" && lastAssistant.errorMessage.trim().length > 0)) &&
       !ctx.hasPendingMessages(),
     );
+
+    if (!isTerminalError && lastAssistant) {
+      const longText = messageText(lastAssistant as AgentMessage).trim();
+      if (longText.length >= LONGFORM_MIN_CHARS) {
+        const sections = splitLongFormSections(longText);
+        if (sections.length >= 2) {
+          openLongFormPager(ctx, sections, 0);
+        }
+      }
+    }
 
     if (config.bells.enabled) {
       if (isTerminalError) {
