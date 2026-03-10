@@ -497,7 +497,7 @@ function splitLongFormSections(text: string): LongFormSection[] {
 
     if (isHeading) {
       const title = first.replace(/^#+\s+/, "").trim() || `Section ${idx + 1}`;
-      pushSection(title, lines.slice(1).join("\n"));
+      pushSection(title, block);
     } else {
       const sentence = block.replace(/\s+/g, " ").match(/^[^.!?\n]{4,80}[.!?]?/)?.[0]?.trim() || `Section ${idx + 1}`;
       pushSection(sentence, block);
@@ -983,7 +983,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
               `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
               row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length}`))),
               row(`${dots}`),
-              row(theme.fg("text", section.title)),
               row(),
               ...bodyLines.map((line) => row(` ${line}`)),
               row(),
