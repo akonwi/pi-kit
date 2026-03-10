@@ -500,11 +500,11 @@ async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; 
 }
 
 async function scanFiles(cwd: string): Promise<string[]> {
-  const files: string[] = [];
+  const paths: string[] = [];
   const ignoreRules = await loadIgnoreRules(cwd);
 
   async function walk(dir: string): Promise<void> {
-    if (files.length >= PICKER_MAX_FILES) return;
+    if (paths.length >= PICKER_MAX_FILES) return;
 
     let entries: Awaited<ReturnType<typeof readdir>>;
     try {
@@ -514,24 +514,25 @@ async function scanFiles(cwd: string): Promise<string[]> {
     }
 
     for (const entry of entries) {
-      if (files.length >= PICKER_MAX_FILES) return;
+      if (paths.length >= PICKER_MAX_FILES) return;
       const full = path.join(dir, entry.name);
       const relative = normalizeRelativePath(path.relative(cwd, full));
 
       if (entry.isDirectory()) {
         if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, true))) continue;
+        if (relative) paths.push(`${relative}/`);
         await walk(full);
         continue;
       }
 
       if (!entry.isFile()) continue;
       if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
-      files.push(relative);
+      paths.push(relative);
     }
   }
 
   await walk(cwd);
-  return files;
+  return paths;
 }
 
 function messageText(msg: AgentMessage): string {
