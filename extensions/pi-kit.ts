@@ -41,6 +41,10 @@ const DEFAULT_CONFIG: KitConfig = {
 };
 
 const lastSpokenBySession = new Map<string, string>();
+const lastAutoTitleAttemptBySession = new Map<string, number>();
+const AUTO_TITLE_COOLDOWN_MS = 4 * 60 * 1000;
+const AUTO_TITLE_MIN_USER_MESSAGES = 2;
+const AUTO_TITLE_DISABLED = process.env.PI_KIT_NO_AUTO_TITLE === "1";
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -117,6 +121,31 @@ function renderStatus(config: KitConfig): string {
   const bell = config.bells.enabled ? "🔔 on" : "🔕 off";
   const speech = config.speech.enabled ? "🗣 on" : "🤫 off";
   return `${bell}  ${speech}`;
+}
+
+function getExplicitSessionName(ctx: any): string {
+  return typeof ctx.sessionManager?.getSessionName === "function"
+    ? String(ctx.sessionManager.getSessionName() || "").trim()
+    : "";
+}
+
+function deriveFooterSessionLabel(ctx: any): string {
+  const explicit = getExplicitSessionName(ctx);
+  if (explicit) return explicit;
+
+  const branch = typeof ctx.sessionManager?.getBranch === "function"
+    ? ctx.sessionManager.getBranch()
+    : [];
+
+  if (Array.isArray(branch)) {
+    for (const entry of branch) {
+      if (!entry || entry.type !== "message" || !entry.message || entry.message.role !== "user") continue;
+      const preview = messageText(entry.message as AgentMessage).replace(/\s+/g, " ").trim();
+      if (preview) return clip(preview, 15);
+    }
+  }
+
+  return "Untitled";
 }
 
 function visibleWidth(text: string): number {
@@ -227,6 +256,67 @@ function buildHandoffSummary(messages: AgentMessage[], maxMessages: number, maxC
   return clip(items.join("\n"), maxChars);
 }
 
+function sanitizeGeneratedTitle(raw: string): string {
+  const firstLine = raw.split(/\r?\n/)[0] || "";
+  const cleaned = firstLine
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .replace(/^title\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const words = cleaned.split(" ").filter(Boolean).slice(0, 6);
+  const compact = words.join(" ").replace(/[.!,;:]+$/g, "").trim();
+  if (!compact) return "";
+  if (/^untitled$/i.test(compact)) return "";
+  return clip(compact, 48);
+}
+
+async function maybeAutoNameSession(pi: ExtensionAPI, ctx: any): Promise<void> {
+  if (AUTO_TITLE_DISABLED) return;
+  if (!ctx.sessionManager?.getSessionId) return;
+  if (getExplicitSessionName(ctx)) return;
+
+  const sessionId = ctx.sessionManager.getSessionId();
+  const now = Date.now();
+  const lastAttempt = lastAutoTitleAttemptBySession.get(sessionId) || 0;
+  if (now - lastAttempt < AUTO_TITLE_COOLDOWN_MS) return;
+
+  const context = ctx.sessionManager?.buildSessionContext?.();
+  const messages = Array.isArray(context?.messages) ? context.messages as AgentMessage[] : [];
+  const userCount = messages.filter((m) => m.role === "user").length;
+  if (userCount < AUTO_TITLE_MIN_USER_MESSAGES) return;
+
+  const summary = buildHandoffSummary(messages, 10, 900);
+  if (!summary || /No prior user\/assistant context available\./.test(summary)) return;
+
+  lastAutoTitleAttemptBySession.set(sessionId, now);
+
+  const prompt = [
+    "Generate a concise conversation title.",
+    "Rules:",
+    "- Return title only, no quotes, no markdown.",
+    "- Max 5 words.",
+    "- Focus on concrete task/topic.",
+    "- If unclear, return Untitled.",
+    "",
+    "Conversation summary:",
+    summary,
+  ].join("\n");
+
+  try {
+    const result = await pi.exec("env", ["PI_KIT_NO_AUTO_TITLE=1", "pi", "-p", "--no-session", prompt], {
+      timeout: 25_000,
+    });
+    const title = sanitizeGeneratedTitle(result.stdout || "");
+    if (!title) return;
+    if (getExplicitSessionName(ctx)) return;
+
+    pi.setSessionName(title);
+  } catch {
+    // best effort
+  }
+}
+
 function parseToggleArg(args: string | undefined): "on" | "off" | "toggle" | undefined {
   const raw = (args || "").trim().toLowerCase();
   if (raw === "on" || raw === "off" || raw === "toggle") return raw;
@@ -279,7 +369,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
           const cwd = typeof ctx.cwd === "string" && ctx.cwd.startsWith(home)
             ? `~${ctx.cwd.slice(home.length)}`
             : (ctx.cwd || "");
-          const sessionName = ctx.sessionManager.getSessionName() || "Init Pi";
+          const sessionName = deriveFooterSessionLabel(ctx);
           const row1Left = theme.fg("muted", `${cwd} • ${sessionName}`);
           const row1Right = theme.fg("dim", renderStatus(currentConfig));
 
@@ -434,6 +524,8 @@ export default function piKitExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_end", async (event, ctx) => {
     const config = await readConfig();
+
+    await maybeAutoNameSession(pi, ctx);
 
     const lastAssistant = [...event.messages]
       .reverse()
