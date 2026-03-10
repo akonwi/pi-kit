@@ -1057,11 +1057,14 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             typeof maxTokens === "number" && maxTokens > 0
               ? `${((usedTokens / maxTokens) * 100).toFixed(1)}%`
               : "0%";
-          const row2Left = theme.fg("dim", `🪟 ${contextPct}`);
-
           const modelId = ctx.model?.id || "no-model";
-          const thinking = pi.getThinkingLevel?.() || "off";
-          const row2Right = theme.fg("dim", `${modelId} • ${thinking}`);
+          const thinkingLevel = pi.getThinkingLevel?.() || "off";
+          const thinkingEmoji =
+            thinkingLevel === "high" ? "🔥" :
+            thinkingLevel === "medium" ? "💡" :
+            thinkingLevel === "low" ? "💤" : "⛔";
+          const row2Left = theme.fg("dim", `${modelId} • ${thinkingEmoji} • 🪟 ${contextPct}`);
+          const row2Right = theme.fg("dim", "");
 
           const footerPadX = 1;
           const innerWidth = Math.max(1, width - footerPadX * 2);
