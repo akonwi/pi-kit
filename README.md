@@ -57,11 +57,14 @@ Rules:
 - `packages/*/dist/` matches relative paths from the repo root
 - built-in excludes still apply: `.git/`, `node_modules/`, `.pi/`, `.agents/`, `dist/`, `build/`
 
-You can also add entries from inside Pi:
+You can also manage entries from inside Pi:
 
 ```text
 /files:ignore apps/web/.next
 /files:ignore packages/api/dist
+/files:unignore packages/api/dist
 ```
 
-The command finds the nearest existing `.pi-files-ignore` up the tree from the target path and appends the rule there. If none exists yet, it creates one at the session root.
+- `/files:ignore` adds to the nearest existing `.pi-files-ignore` up the tree from the target path; if none exists yet, it creates one at the session root
+- `/files:unignore` removes the matching entry from the nearest applicable ignore file
+- running either command with no path opens an interactive picker

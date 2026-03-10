@@ -1,4 +1,4 @@
-import { appendFile, readdir, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { CustomEditor, SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -353,6 +353,150 @@ async function appendIgnoreEntry(baseDir: string, targetPath: string, isDirector
   const payload = `${needsLeadingNewline ? "\n" : ""}${entry}\n`;
   await appendFile(ignoreFile, payload, "utf8");
   return { ignoreFile, entry, created, duplicate: false };
+}
+
+type IgnoreEntryRecord = {
+  ignoreFile: string;
+  entry: string;
+};
+
+async function listIgnoreEntriesInFile(ignoreFile: string): Promise<IgnoreEntryRecord[]> {
+  try {
+    const content = await readFile(ignoreFile, "utf8");
+    return content
+      .split(/\r?\n/g)
+      .map((line) => normalizeIgnoreEntry(line))
+      .filter(Boolean)
+      .map((entry) => ({ ignoreFile, entry }));
+  } catch {
+    return [];
+  }
+}
+
+async function removeIgnoreEntryFromFile(ignoreFile: string, entry: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await readFile(ignoreFile, "utf8");
+  } catch {
+    return false;
+  }
+
+  const lines = content.split(/\r?\n/g);
+  const kept = lines.filter((line) => normalizeIgnoreEntry(line) !== entry);
+  if (kept.length === lines.length) return false;
+
+  const serialized = `${kept.join("\n").replace(/\n+$/g, "")}\n`;
+  await writeFile(ignoreFile, serialized, "utf8");
+  return true;
+}
+
+async function removeIgnoreEntryByPath(baseDir: string, targetPath: string): Promise<{ ignoreFile?: string; entry?: string; removed: boolean }> {
+  const searchDirs: string[] = [];
+
+  let current = targetPath;
+  while (isWithinDir(current, baseDir)) {
+    searchDirs.push(current);
+    if (current === baseDir) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const candidates = Array.from(new Set([
+    ...searchDirs.flatMap((dir) => {
+      const relToDir = normalizeRelativePath(path.relative(dir, targetPath));
+      return [relToDir, `${relToDir}/`].filter(Boolean);
+    }),
+    normalizeRelativePath(path.relative(baseDir, targetPath)),
+    `${normalizeRelativePath(path.relative(baseDir, targetPath))}/`,
+  ].filter(Boolean)));
+
+  for (const dir of searchDirs) {
+    const ignoreFile = path.join(dir, FILE_PICKER_IGNORE_FILE);
+    const entries = await listIgnoreEntriesInFile(ignoreFile);
+    for (const candidate of candidates) {
+      if (entries.some((item) => item.entry === candidate)) {
+        const removed = await removeIgnoreEntryFromFile(ignoreFile, candidate);
+        if (removed) return { ignoreFile, entry: candidate, removed: true };
+      }
+    }
+  }
+
+  return { removed: false };
+}
+
+async function scanIgnoreFiles(cwd: string): Promise<string[]> {
+  const found: string[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (DEFAULT_FILE_SCAN_EXCLUDES.includes(entry.name)) continue;
+        await walk(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name === FILE_PICKER_IGNORE_FILE) {
+        found.push(full);
+      }
+    }
+  }
+
+  await walk(cwd);
+  return found.sort((a, b) => a.localeCompare(b));
+}
+
+async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; value: string }>> {
+  const files: string[] = [];
+  const dirs = new Set<string>();
+  const ignoreRules = await loadIgnoreRules(cwd);
+
+  async function walk(dir: string): Promise<void> {
+    if (files.length >= PICKER_MAX_FILES) return;
+
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (files.length >= PICKER_MAX_FILES) return;
+      const full = path.join(dir, entry.name);
+      const relative = normalizeRelativePath(path.relative(cwd, full));
+
+      if (entry.isDirectory()) {
+        if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, true))) continue;
+        if (relative) dirs.add(`${relative}/`);
+        await walk(full);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      if (relative === FILE_PICKER_IGNORE_FILE) continue;
+      if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
+      files.push(relative);
+    }
+  }
+
+  await walk(cwd);
+
+  const dirItems = Array.from(dirs)
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ label: `dir  ${value}`, value }));
+  const fileItems = files
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ label: `file ${value}`, value }));
+
+  return [...dirItems, ...fileItems];
 }
 
 async function scanFiles(cwd: string): Promise<string[]> {
@@ -1034,8 +1178,49 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     handler: manageHandler,
   });
 
+  const choosePathToIgnore = async (ctx: any): Promise<string | null | undefined> => {
+    if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
+    const items = await scanPathPickerItems(ctx.cwd);
+    if (items.length === 0) return null;
+    const labels = items.slice(0, 4000).map((item) => item.label);
+    const selected = await ctx.ui.select("Ignore file or directory", labels);
+    if (!selected) return undefined;
+    return items.find((item) => item.label === selected)?.value;
+  };
+
+  const chooseIgnoreEntryToRemove = async (ctx: any): Promise<IgnoreEntryRecord | null | undefined> => {
+    if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
+    const ignoreFiles = await scanIgnoreFiles(ctx.cwd);
+    const entries = (await Promise.all(ignoreFiles.map((ignoreFile) => listIgnoreEntriesInFile(ignoreFile))))
+      .flat()
+      .sort((a, b) => {
+        const fileCmp = a.ignoreFile.localeCompare(b.ignoreFile);
+        return fileCmp !== 0 ? fileCmp : a.entry.localeCompare(b.entry);
+      });
+    if (entries.length === 0) return null;
+
+    const labels = entries.map((item) => {
+      const location = path.relative(ctx.cwd, item.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+      return `${location}  ·  ${item.entry}`;
+    });
+    const selected = await ctx.ui.select("Unignore entry", labels);
+    if (!selected) return undefined;
+    const index = labels.indexOf(selected);
+    return index >= 0 ? entries[index] : undefined;
+  };
+
+  const refreshFileIndex = async (ctx: any): Promise<void> => {
+    fileIndex = await scanFiles(ctx.cwd);
+    requestEditorRender?.();
+  };
+
   const fileIgnoreHandler = async (args: string | undefined, ctx: any) => {
     let raw = (args || "").trim();
+    if (!raw) {
+      const picked = await choosePathToIgnore(ctx);
+      if (picked === undefined) return;
+      raw = picked || "";
+    }
     if (!raw && ctx.hasUI && typeof ctx.ui.input === "function") {
       raw = String(await ctx.ui.input("Ignore file or directory", "") || "").trim();
     }
@@ -1045,7 +1230,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const cleaned = raw.replace(/^@/, "").trim();
+    const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
     const absolute = path.resolve(ctx.cwd, cleaned);
 
     if (!isWithinDir(absolute, ctx.cwd)) {
@@ -1067,8 +1252,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     }
 
     const result = await appendIgnoreEntry(ctx.cwd, absolute, info.isDirectory());
-    fileIndex = await scanFiles(ctx.cwd);
-    requestEditorRender?.();
+    await refreshFileIndex(ctx);
 
     if (result.duplicate) {
       ctx.ui.notify(`Already ignored in ${path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE}`, "info");
@@ -1081,6 +1265,50 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     showTransientBadge("FILES IGNORED");
   };
 
+  const fileUnignoreHandler = async (args: string | undefined, ctx: any) => {
+    let raw = (args || "").trim();
+
+    if (!raw) {
+      const chosen = await chooseIgnoreEntryToRemove(ctx);
+      if (chosen === undefined) return;
+      if (chosen === null) {
+        ctx.ui.notify("No ignore entries found", "warning");
+        return;
+      }
+
+      const removed = await removeIgnoreEntryFromFile(chosen.ignoreFile, chosen.entry);
+      if (!removed) {
+        ctx.ui.notify("Ignore entry was not found", "warning");
+        return;
+      }
+
+      await refreshFileIndex(ctx);
+      const location = path.relative(ctx.cwd, chosen.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+      ctx.ui.notify(`Removed ${chosen.entry} from ${location}`, "info");
+      showTransientBadge("FILES UNIGNORED");
+      return;
+    }
+
+    const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
+    const absolute = path.resolve(ctx.cwd, cleaned);
+
+    if (!isWithinDir(absolute, ctx.cwd)) {
+      ctx.ui.notify("Path must be inside the current session directory", "warning");
+      return;
+    }
+
+    const result = await removeIgnoreEntryByPath(ctx.cwd, absolute);
+    if (!result.removed || !result.ignoreFile || !result.entry) {
+      ctx.ui.notify(`No ignore entry found for ${cleaned}`, "warning");
+      return;
+    }
+
+    await refreshFileIndex(ctx);
+    const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+    ctx.ui.notify(`Removed ${result.entry} from ${location}`, "info");
+    showTransientBadge("FILES UNIGNORED");
+  };
+
   pi.registerCommand("files:ignore", {
     description: "Add a file or directory to the nearest .pi-files-ignore",
     handler: fileIgnoreHandler,
@@ -1089,6 +1317,16 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
   pi.registerCommand("files-ignore", {
     description: "Alias for /files:ignore",
     handler: fileIgnoreHandler,
+  });
+
+  pi.registerCommand("files:unignore", {
+    description: "Remove a file or directory from .pi-files-ignore",
+    handler: fileUnignoreHandler,
+  });
+
+  pi.registerCommand("files-unignore", {
+    description: "Alias for /files:unignore",
+    handler: fileUnignoreHandler,
   });
 
   pi.on("input", async (event, ctx) => {
