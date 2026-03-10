@@ -1,4 +1,4 @@
-import { readdir, readFile, rm } from "node:fs/promises";
+import { appendFile, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { CustomEditor, SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -23,7 +23,8 @@ const PANEL_MARGIN_MIN = 0;
 const PANEL_MARGIN_MAX = 0;
 const PICKER_MAX_ITEMS = 8;
 const PICKER_MAX_FILES = 4000;
-const FILE_SCAN_EXCLUDES = new Set([".git", "node_modules", ".pi", ".agents", "dist", "build"]);
+const DEFAULT_FILE_SCAN_EXCLUDES = [".git", "node_modules", ".pi", ".agents", "dist", "build"];
+const FILE_PICKER_IGNORE_FILE = ".pi-files-ignore";
 const FALLBACK_BUILT_IN_COMMANDS = [
   "login",
   "logout",
@@ -212,8 +213,151 @@ async function discoverBuiltInCommands(): Promise<string[]> {
   }
 }
 
+type IgnoreRule = {
+  raw: string;
+  directoryOnly: boolean;
+  hasSlash: boolean;
+};
+
+function normalizeRelativePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+}
+
+function stripComment(line: string): string {
+  return line.trim();
+}
+
+function wildcardToRegExp(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "::DOUBLE_STAR::")
+    .replace(/\*/g, "[^/]*")
+    .replace(/::DOUBLE_STAR::/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+function compileIgnoreRules(lines: string[]): IgnoreRule[] {
+  return lines
+    .map((line) => stripComment(line))
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .map((line) => {
+      const directoryOnly = line.endsWith("/");
+      const raw = normalizeRelativePath(directoryOnly ? line.slice(0, -1) : line);
+      return {
+        raw,
+        directoryOnly,
+        hasSlash: raw.includes("/"),
+      } satisfies IgnoreRule;
+    })
+    .filter((rule) => rule.raw.length > 0);
+}
+
+async function loadIgnoreRules(cwd: string): Promise<IgnoreRule[]> {
+  const builtIns = compileIgnoreRules(DEFAULT_FILE_SCAN_EXCLUDES.map((name) => `${name}/`));
+  const ignorePath = path.join(cwd, FILE_PICKER_IGNORE_FILE);
+
+  try {
+    const content = await readFile(ignorePath, "utf8");
+    const custom = compileIgnoreRules(content.split(/\r?\n/g));
+    return [...builtIns, ...custom];
+  } catch {
+    return builtIns;
+  }
+}
+
+function matchesIgnoreRule(relativePath: string, rule: IgnoreRule, isDirectory: boolean): boolean {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return false;
+
+  if (rule.directoryOnly && !isDirectory && !normalized.startsWith(`${rule.raw}/`)) {
+    return false;
+  }
+
+  if (!rule.hasSlash) {
+    const segmentRegex = wildcardToRegExp(rule.raw);
+    const segments = normalized.split("/");
+
+    if (rule.directoryOnly) {
+      return segments.some((segment) => segmentRegex.test(segment));
+    }
+
+    return segments.some((segment) => segmentRegex.test(segment));
+  }
+
+  const pathRegex = wildcardToRegExp(rule.raw);
+  if (pathRegex.test(normalized)) return true;
+  return rule.directoryOnly && normalized.startsWith(`${rule.raw}/`);
+}
+
+function isWithinDir(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function findNearestIgnoreFile(baseDir: string, targetPath: string): Promise<string> {
+  let current = targetPath;
+  while (isWithinDir(current, baseDir)) {
+    const candidate = path.join(current, FILE_PICKER_IGNORE_FILE);
+    try {
+      const info = await stat(candidate);
+      if (info.isFile()) return candidate;
+    } catch {
+      // continue upward
+    }
+
+    if (current === baseDir) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return path.join(baseDir, FILE_PICKER_IGNORE_FILE);
+}
+
+function normalizeIgnoreEntry(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("#")) return "";
+  const directoryOnly = trimmed.endsWith("/");
+  const normalized = normalizeRelativePath(directoryOnly ? trimmed.slice(0, -1) : trimmed);
+  return directoryOnly ? `${normalized}/` : normalized;
+}
+
+async function appendIgnoreEntry(baseDir: string, targetPath: string, isDirectory: boolean): Promise<{ ignoreFile: string; entry: string; created: boolean; duplicate: boolean }> {
+  const anchorDir = isDirectory ? targetPath : path.dirname(targetPath);
+  const ignoreFile = await findNearestIgnoreFile(baseDir, anchorDir);
+  const ignoreDir = path.dirname(ignoreFile);
+  const relative = normalizeRelativePath(path.relative(ignoreDir, targetPath));
+  const entry = isDirectory ? `${relative}/` : relative;
+
+  let existing = "";
+  let created = false;
+  try {
+    existing = await readFile(ignoreFile, "utf8");
+  } catch {
+    created = true;
+  }
+
+  const existingEntries = new Set(
+    existing
+      .split(/\r?\n/g)
+      .map((line) => normalizeIgnoreEntry(line))
+      .filter(Boolean),
+  );
+
+  if (existingEntries.has(entry)) {
+    return { ignoreFile, entry, created: false, duplicate: true };
+  }
+
+  const needsLeadingNewline = existing.length > 0 && !existing.endsWith("\n");
+  const payload = `${needsLeadingNewline ? "\n" : ""}${entry}\n`;
+  await appendFile(ignoreFile, payload, "utf8");
+  return { ignoreFile, entry, created, duplicate: false };
+}
+
 async function scanFiles(cwd: string): Promise<string[]> {
   const files: string[] = [];
+  const ignoreRules = await loadIgnoreRules(cwd);
 
   async function walk(dir: string): Promise<void> {
     if (files.length >= PICKER_MAX_FILES) return;
@@ -228,15 +372,17 @@ async function scanFiles(cwd: string): Promise<string[]> {
     for (const entry of entries) {
       if (files.length >= PICKER_MAX_FILES) return;
       const full = path.join(dir, entry.name);
+      const relative = normalizeRelativePath(path.relative(cwd, full));
 
       if (entry.isDirectory()) {
-        if (FILE_SCAN_EXCLUDES.has(entry.name)) continue;
+        if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, true))) continue;
         await walk(full);
         continue;
       }
 
       if (!entry.isFile()) continue;
-      files.push(path.relative(cwd, full));
+      if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
+      files.push(relative);
     }
   }
 
@@ -886,6 +1032,63 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
   pi.registerCommand("threads-manage", {
     description: "Alias for /threads:manage",
     handler: manageHandler,
+  });
+
+  const fileIgnoreHandler = async (args: string | undefined, ctx: any) => {
+    let raw = (args || "").trim();
+    if (!raw && ctx.hasUI && typeof ctx.ui.input === "function") {
+      raw = String(await ctx.ui.input("Ignore file or directory", "") || "").trim();
+    }
+
+    if (!raw) {
+      ctx.ui.notify("Usage: /files:ignore <path>", "warning");
+      return;
+    }
+
+    const cleaned = raw.replace(/^@/, "").trim();
+    const absolute = path.resolve(ctx.cwd, cleaned);
+
+    if (!isWithinDir(absolute, ctx.cwd)) {
+      ctx.ui.notify("Path must be inside the current session directory", "warning");
+      return;
+    }
+
+    let info: Awaited<ReturnType<typeof stat>>;
+    try {
+      info = await stat(absolute);
+    } catch {
+      ctx.ui.notify(`Path not found: ${cleaned}`, "warning");
+      return;
+    }
+
+    if (!info.isFile() && !info.isDirectory()) {
+      ctx.ui.notify("Only files and directories can be ignored", "warning");
+      return;
+    }
+
+    const result = await appendIgnoreEntry(ctx.cwd, absolute, info.isDirectory());
+    fileIndex = await scanFiles(ctx.cwd);
+    requestEditorRender?.();
+
+    if (result.duplicate) {
+      ctx.ui.notify(`Already ignored in ${path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE}`, "info");
+      return;
+    }
+
+    const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+    const status = result.created ? "Created" : "Updated";
+    ctx.ui.notify(`${status} ${location} with ${result.entry}`, "info");
+    showTransientBadge("FILES IGNORED");
+  };
+
+  pi.registerCommand("files:ignore", {
+    description: "Add a file or directory to the nearest .pi-files-ignore",
+    handler: fileIgnoreHandler,
+  });
+
+  pi.registerCommand("files-ignore", {
+    description: "Alias for /files:ignore",
+    handler: fileIgnoreHandler,
   });
 
   pi.on("input", async (event, ctx) => {
