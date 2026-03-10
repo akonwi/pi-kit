@@ -183,10 +183,6 @@ function withHorizontalPadding(line: string, totalWidth: number, pad: number): s
   return `${" ".repeat(safePad)}${inner}${" ".repeat(safePad)}`;
 }
 
-function fmtCount(n: number): string {
-  return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
-}
-
 function writeBell(): void {
   try {
     process.stdout.write("\u0007");
@@ -1041,20 +1037,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
         dispose: unsub,
         invalidate() {},
         render(width: number): string[] {
-          const branch = ctx.sessionManager.getBranch();
-          let input = 0;
-          let output = 0;
-          let cost = 0;
-
-          for (const e of branch) {
-            if (e.type === "message" && e.message.role === "assistant") {
-              const usage = (e.message as { usage?: { input?: number; output?: number; cost?: { total?: number } } }).usage;
-              input += usage?.input || 0;
-              output += usage?.output || 0;
-              cost += usage?.cost?.total || 0;
-            }
-          }
-
           const home = homedir();
           const cwd = typeof ctx.cwd === "string" && ctx.cwd.startsWith(home)
             ? `~${ctx.cwd.slice(home.length)}`
@@ -1063,7 +1045,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
           const row1Left = theme.fg("muted", `${cwd} • ${sessionName}`);
           const row1Right = theme.fg("dim", renderStatus(currentConfig));
 
-          const usageText = `↑${fmtCount(input)} ↓${fmtCount(output)} $${cost.toFixed(3)}`;
           const contextUsage = ctx.getContextUsage?.();
           const maxTokens =
             (contextUsage && typeof contextUsage.maxTokens === "number" ? contextUsage.maxTokens : undefined) ||
@@ -1072,11 +1053,11 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             contextUsage && typeof contextUsage.tokens === "number"
               ? contextUsage.tokens
               : 0;
-          const contextSuffix =
+          const contextPct =
             typeof maxTokens === "number" && maxTokens > 0
-              ? ` ${((usedTokens / maxTokens) * 100).toFixed(1)}%/${fmtCount(maxTokens)} (auto)`
-              : " 0.0%/unknown (auto)";
-          const row2Left = theme.fg("dim", `${usageText}${contextSuffix}`);
+              ? `${((usedTokens / maxTokens) * 100).toFixed(1)}%`
+              : "0%";
+          const row2Left = theme.fg("dim", `context: ${contextPct}`);
 
           const modelId = ctx.model?.id || "no-model";
           const thinking = pi.getThinkingLevel?.() || "off";
