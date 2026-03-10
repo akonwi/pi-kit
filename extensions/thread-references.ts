@@ -589,15 +589,12 @@ class ThreadReferenceEditor extends CustomEditor {
 
   override handleInput(data: string): void {
     if (this.picker) {
-      const isUp = isArrowUp(data) || data === "k" || data === "\x10"; // k / Ctrl+P
-      const isDown = isArrowDown(data) || data === "j" || data === "\x0e"; // j / Ctrl+N
-
-      if (isUp) {
+      if (isArrowUp(data)) {
         this.picker.selected = Math.max(0, this.picker.selected - 1);
         this.tui.requestRender();
         return;
       }
-      if (isDown) {
+      if (isArrowDown(data)) {
         this.picker.selected = Math.min(this.picker.items.length - 1, this.picker.selected + 1);
         this.tui.requestRender();
         return;
@@ -612,13 +609,15 @@ class ThreadReferenceEditor extends CustomEditor {
         this.tui.requestRender();
         return;
       }
-      // If it's any non-arrow ESC-prefixed sequence, treat it as dismiss while picker is open.
-      const escLike = data.startsWith("\x1b") && !isUp && !isDown;
-      if (isEscape(data) || escLike) {
+      if (isEscape(data)) {
         this.picker = undefined;
         this.tui.requestRender();
         return;
       }
+
+      // Any other input: dismiss picker first, then type the character.
+      // updatePickerState() below may re-open a picker based on new text.
+      this.picker = undefined;
     }
 
     super.handleInput(data);
