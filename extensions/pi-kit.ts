@@ -1329,16 +1329,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       !ctx.hasPendingMessages(),
     );
 
-    if (!isTerminalError && lastAssistant) {
-      const longText = messageText(lastAssistant as AgentMessage).trim();
-      if (longText.length >= LONGFORM_MIN_CHARS) {
-        const sections = splitLongFormSections(longText);
-        if (sections.length >= 2) {
-          openLongFormPager(ctx, sections, 0);
-        }
-      }
-    }
-
     if (config.bells.enabled) {
       if (isTerminalError) {
         await playErrorAlert(pi, config);
