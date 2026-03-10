@@ -1057,7 +1057,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             typeof maxTokens === "number" && maxTokens > 0
               ? `${((usedTokens / maxTokens) * 100).toFixed(1)}%`
               : "0%";
-          const row2Left = theme.fg("dim", `context: ${contextPct}`);
+          const row2Left = theme.fg("dim", `🪟 ${contextPct}`);
 
           const modelId = ctx.model?.id || "no-model";
           const thinking = pi.getThinkingLevel?.() || "off";
