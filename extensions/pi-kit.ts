@@ -926,20 +926,65 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     ctx.ui.custom<void>(
       (tui, theme, _kb, done) => {
         let index = Math.max(0, Math.min(sections.length - 1, startIndex));
+        let scrollOffset = 0;
+        let lastRenderWidth = Math.max(24, (process.stdout.columns || 80) - 2);
+
+        const getPagerMetrics = (inside: number) => {
+          const section = sections[index]!;
+          const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
+            color: (text: string) => theme.fg("text", text),
+          });
+          const bodyLines = md.render(Math.max(12, inside - 4));
+          const termRows = process.stdout.rows || 40;
+          const reservedForComposer = 7;
+          const availableRows = Math.max(12, termRows - reservedForComposer);
+          const visibleBodyRows = Math.max(4, availableRows - 9);
+          const maxScroll = Math.max(0, bodyLines.length - visibleBodyRows);
+
+          return { section, bodyLines, availableRows, visibleBodyRows, maxScroll };
+        };
 
         return {
           handleInput(data: string): void {
+            const { maxScroll } = getPagerMetrics(lastRenderWidth);
+
             if (matchesKey(data, Key.escape)) {
               done();
               return;
             }
             if (matchesKey(data, Key.right) || matchesKey(data, Key.ctrl("shift+right"))) {
-              if (index < sections.length - 1) index += 1;
+              if (index < sections.length - 1) {
+                index += 1;
+                scrollOffset = 0;
+              }
               tui.requestRender();
               return;
             }
             if (matchesKey(data, Key.left) || matchesKey(data, Key.ctrl("shift+left"))) {
-              if (index > 0) index -= 1;
+              if (index > 0) {
+                index -= 1;
+                scrollOffset = 0;
+              }
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.up)) {
+              if (scrollOffset > 0) scrollOffset -= 1;
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.down)) {
+              if (scrollOffset < maxScroll) scrollOffset += 1;
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.home)) {
+              scrollOffset = 0;
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.end)) {
+              scrollOffset = maxScroll;
               tui.requestRender();
               return;
             }
@@ -947,7 +992,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
 
           render(width: number): string[] {
             const inside = Math.max(24, width - 2);
-            const section = sections[index]!;
+            lastRenderWidth = inside;
 
             const stripAnsi = (s: string) => s
               .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
@@ -966,23 +1011,29 @@ export default function piKitExtension(pi: ExtensionAPI): void {
               .map((_, idx) => idx === index ? theme.fg("accent", "●") : theme.fg("dim", "○"))
               .join(" ");
 
-            const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
-              color: (text: string) => theme.fg("text", text),
-            });
-            const bodyLines = md.render(Math.max(12, inside - 4));
+            const { section, bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
+            scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
 
-            const termRows = process.stdout.rows || 40;
-            const reservedForComposer = 7;
-            const availableRows = Math.max(12, termRows - reservedForComposer);
+            const visibleBodyLines = bodyLines.slice(scrollOffset, scrollOffset + visibleBodyRows);
+            const firstVisibleLine = bodyLines.length === 0 ? 0 : scrollOffset + 1;
+            const lastVisibleLine = bodyLines.length === 0
+              ? 0
+              : Math.min(bodyLines.length, scrollOffset + visibleBodyLines.length);
+            const scrollStatus = maxScroll > 0
+              ? `Lines ${firstVisibleLine}-${lastVisibleLine} / ${bodyLines.length}`
+              : `Lines ${bodyLines.length}`;
 
             const content = [
               `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
               row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length}`))),
+              row(theme.fg("text", theme.bold(section.title))),
               row(`${dots}`),
+              row(theme.fg("dim", scrollStatus)),
               row(),
-              ...bodyLines.map((line) => row(` ${line}`)),
+              ...visibleBodyLines.map((line) => row(` ${line}`)),
+              ...Array.from({ length: Math.max(0, visibleBodyRows - visibleBodyLines.length) }, () => row()),
               row(),
-              row(theme.fg("dim", "← previous • → next • Esc close")),
+              row(theme.fg("dim", "↑/↓ scroll • ←/→ section • Home/End • Esc close")),
             ];
 
             while (content.length < availableRows - 1) {
