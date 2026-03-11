@@ -57,6 +57,14 @@ type LongFormSection = {
   body: string;
 };
 
+type LongFormPagerContent = {
+  sessionId: string;
+  entryId: string;
+  sections: LongFormSection[];
+};
+
+const pagerNotesByEntryId = new Map<string, Map<number, string>>();
+
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
@@ -522,24 +530,65 @@ function splitLongFormSections(text: string): LongFormSection[] {
   return sections;
 }
 
-function buildLongFormPagerFromLastAssistant(ctx: any): LongFormSection[] | null {
+function getPagerNotes(sessionId: string, entryId: string): Map<number, string> {
+  const key = `${sessionId}:${entryId}`;
+  let notes = pagerNotesByEntryId.get(key);
+  if (!notes) {
+    notes = new Map<number, string>();
+    pagerNotesByEntryId.set(key, notes);
+  }
+  return notes;
+}
+
+function countPagerNotes(notes: Map<number, string>): number {
+  return Array.from(notes.values()).filter((note) => note.trim().length > 0).length;
+}
+
+function formatPagerFeedbackMessage(pager: LongFormPagerContent, notes: Map<number, string>): string | null {
+  const blocks: string[] = [];
+
+  pager.sections.forEach((section, idx) => {
+    const note = notes.get(idx)?.trim();
+    if (!note) return;
+    blocks.push(`## Section ${idx + 1}: ${section.title}\n${note}`);
+  });
+
+  if (blocks.length === 0) return null;
+
+  return [
+    "Here is my feedback on your previous response, grouped by section.",
+    "",
+    ...blocks.flatMap((block, idx) => idx === 0 ? [block] : ["", block]),
+    "",
+    "Please use this section-specific feedback in your revision or reply.",
+  ].join("\n");
+}
+
+function buildLongFormPagerFromLastAssistant(ctx: any): LongFormPagerContent | null {
   const branch = Array.isArray(ctx.sessionManager?.getBranch?.()) ? ctx.sessionManager.getBranch() : [];
+  const sessionId = typeof ctx.sessionManager?.getSessionId?.() === "string"
+    ? ctx.sessionManager.getSessionId()
+    : "unknown-session";
   let lastAssistant: AgentMessage | undefined;
+  let lastAssistantEntryId: string | null = null;
 
   for (let i = branch.length - 1; i >= 0; i--) {
     const entry = branch[i];
     if (!entry || entry.type !== "message" || !entry.message || entry.message.role !== "assistant") continue;
     lastAssistant = entry.message as AgentMessage;
+    lastAssistantEntryId = typeof entry.id === "string" && entry.id.trim()
+      ? entry.id
+      : `assistant-${Date.now()}`;
     break;
   }
 
-  if (!lastAssistant) return null;
+  if (!lastAssistant || !lastAssistantEntryId) return null;
 
   const text = messageText(lastAssistant).trim();
   if (!text || text.length < LONGFORM_MIN_CHARS) return null;
 
   const sections = splitLongFormSections(text);
-  return sections.length >= 2 ? sections : null;
+  return sections.length >= 2 ? { sessionId, entryId: lastAssistantEntryId, sections } : null;
 }
 
 async function runGuidedQuestionnaire(
@@ -913,83 +962,185 @@ async function runGuidedQuestionnaire(
 
 export default function piKitExtension(pi: ExtensionAPI): void {
   let currentConfig: KitConfig = sanitizeConfig(DEFAULT_CONFIG);
-  let activePagerOverlay: { setHidden: (h: boolean) => void; hide: () => void } | null = null;
+  let activePagerUI: { close: () => void; requestRender: () => void } | null = null;
 
-  function openLongFormPager(ctx: any, sections: LongFormSection[], startIndex = 0): void {
+  function openLongFormPager(ctx: any, pager: LongFormPagerContent, startIndex = 0): void {
+    const { sections } = pager;
     if (!ctx.hasUI || sections.length < 2) return;
 
-    if (activePagerOverlay) {
-      activePagerOverlay.hide();
-      activePagerOverlay = null;
+    if (activePagerUI) {
+      activePagerUI.close();
+      activePagerUI = null;
     }
 
-    ctx.ui.custom<void>(
-      (tui, theme, _kb, done) => {
-        let index = Math.max(0, Math.min(sections.length - 1, startIndex));
-        let scrollOffset = 0;
-        let lastRenderWidth = Math.max(24, (process.stdout.columns || 80) - 2);
+    const notes = getPagerNotes(pager.sessionId, pager.entryId);
+    let index = Math.max(0, Math.min(sections.length - 1, startIndex));
+    let scrollOffset = 0;
+    let lastRenderWidth = Math.max(24, (process.stdout.columns || 80) - 2);
+    let isSubmittingNotes = false;
+    const previousEditorText = ctx.ui.getEditorText();
+    let pagerTui: any = null;
+    let closed = false;
+    let lastSectionNavDirection: "next" | "prev" | null = null;
+    let lastSectionNavAt = 0;
 
-        const getPagerMetrics = (inside: number) => {
-          const section = sections[index]!;
-          const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
-            color: (text: string) => theme.fg("text", text),
-          });
-          const bodyLines = md.render(Math.max(12, inside - 4));
-          const termRows = process.stdout.rows || 40;
-          const reservedForComposer = 7;
-          const availableRows = Math.max(12, termRows - reservedForComposer);
-          const visibleBodyRows = Math.max(4, availableRows - 9);
-          const maxScroll = Math.max(0, bodyLines.length - visibleBodyRows);
+    const persistCurrentNote = () => {
+      const normalized = ctx.ui.getEditorText().trim();
+      if (normalized) notes.set(index, normalized);
+      else notes.delete(index);
+    };
 
-          return { section, bodyLines, availableRows, visibleBodyRows, maxScroll };
-        };
+    const loadCurrentNote = () => {
+      ctx.ui.setEditorText(notes.get(index) || "");
+    };
+
+    const requestRender = () => {
+      pagerTui?.requestRender?.();
+    };
+
+    const getPagerMetrics = (inside: number) => {
+      const section = sections[index]!;
+      const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
+        color: (text: string) => ctx.ui.theme.fg("text", text),
+      });
+      const bodyLines = md.render(Math.max(12, inside - 4));
+      const termRows = process.stdout.rows || 40;
+      const availableRows = Math.max(8, termRows - 10);
+      const visibleBodyRows = Math.max(4, availableRows - 8);
+      const maxScroll = Math.max(0, bodyLines.length - visibleBodyRows);
+
+      return { section, bodyLines, availableRows, visibleBodyRows, maxScroll };
+    };
+
+    const moveToSection = (nextIndex: number, direction: "next" | "prev") => {
+      if (nextIndex === index) return;
+
+      const now = Date.now();
+      if (lastSectionNavDirection === direction && now - lastSectionNavAt < 75) {
+        return;
+      }
+      lastSectionNavDirection = direction;
+      lastSectionNavAt = now;
+
+      persistCurrentNote();
+      index = nextIndex;
+      scrollOffset = 0;
+      loadCurrentNote();
+      requestRender();
+    };
+
+    const closePager = (restoreEditor = true) => {
+      if (closed) return;
+      closed = true;
+      persistCurrentNote();
+      unsubscribeInput();
+      ctx.ui.setWidget("pi-kit-pager", undefined);
+      ctx.ui.setStatus("pager", undefined);
+      if (restoreEditor) ctx.ui.setEditorText(previousEditorText);
+      if (activePagerUI === pagerUI) activePagerUI = null;
+    };
+
+    const submitSectionNotes = () => {
+      if (isSubmittingNotes) return;
+
+      persistCurrentNote();
+      const message = formatPagerFeedbackMessage(pager, notes);
+      if (!message) {
+        ctx.ui.notify("No section feedback to send yet.", "warning");
+        return;
+      }
+
+      isSubmittingNotes = true;
+
+      try {
+        pagerNotesByEntryId.delete(`${pager.sessionId}:${pager.entryId}`);
+        closePager(true);
+        if (ctx.isIdle()) {
+          pi.sendUserMessage(message);
+        } else {
+          pi.sendUserMessage(message, { deliverAs: "followUp" });
+          ctx.ui.notify("Grouped section feedback queued.", "info");
+        }
+      } catch (error) {
+        isSubmittingNotes = false;
+        const detail = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Failed to send feedback: ${detail}`, "error");
+        requestRender();
+      }
+    };
+
+    const scheduleSync = () => {
+      queueMicrotask(() => {
+        if (closed) return;
+        persistCurrentNote();
+        requestRender();
+      });
+    };
+
+    const unsubscribeInput = ctx.ui.onTerminalInput((data: string) => {
+      if (closed) return undefined;
+
+      const { maxScroll } = getPagerMetrics(lastRenderWidth);
+
+      if (matchesKey(data, Key.escape)) {
+        closePager(true);
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.enter) || matchesKey(data, Key.ctrl("s"))) {
+        submitSectionNotes();
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+right"))) {
+        if (index < sections.length - 1) moveToSection(index + 1, "next");
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+left"))) {
+        if (index > 0) moveToSection(index - 1, "prev");
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+up"))) {
+        if (scrollOffset > 0) scrollOffset -= 1;
+        requestRender();
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+down"))) {
+        if (scrollOffset < maxScroll) scrollOffset += 1;
+        requestRender();
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+home"))) {
+        scrollOffset = 0;
+        requestRender();
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("shift+end"))) {
+        scrollOffset = maxScroll;
+        requestRender();
+        return { consume: true };
+      }
+
+      scheduleSync();
+      return undefined;
+    });
+
+    const pagerUI = {
+      close: () => closePager(true),
+      requestRender,
+    };
+
+    activePagerUI = pagerUI;
+    loadCurrentNote();
+    ctx.ui.setStatus(
+      "pager",
+      ctx.ui.theme.fg("dim", "pager: Enter send • Esc close • clear editor to clear note • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll"),
+    );
+
+    ctx.ui.setWidget(
+      "pi-kit-pager",
+      (tui: any, theme: any) => {
+        pagerTui = tui;
 
         return {
-          handleInput(data: string): void {
-            const { maxScroll } = getPagerMetrics(lastRenderWidth);
-
-            if (matchesKey(data, Key.escape)) {
-              done();
-              return;
-            }
-            if (matchesKey(data, Key.right) || matchesKey(data, Key.ctrl("shift+right"))) {
-              if (index < sections.length - 1) {
-                index += 1;
-                scrollOffset = 0;
-              }
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.left) || matchesKey(data, Key.ctrl("shift+left"))) {
-              if (index > 0) {
-                index -= 1;
-                scrollOffset = 0;
-              }
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.up)) {
-              if (scrollOffset > 0) scrollOffset -= 1;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.down)) {
-              if (scrollOffset < maxScroll) scrollOffset += 1;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.home)) {
-              scrollOffset = 0;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.end)) {
-              scrollOffset = maxScroll;
-              tui.requestRender();
-              return;
-            }
-          },
-
           render(width: number): string[] {
             const inside = Math.max(24, width - 2);
             lastRenderWidth = inside;
@@ -1007,8 +1158,13 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             const bc = (s: string) => theme.fg("borderAccent", s);
             const row = (content = "") => `${bc("│")}${fit(content)}${bc("│")}`;
 
+            const noteCount = countPagerNotes(notes);
             const dots = sections
-              .map((_, idx) => idx === index ? theme.fg("accent", "●") : theme.fg("dim", "○"))
+              .map((_, idx) => {
+                const hasNote = Boolean(notes.get(idx)?.trim());
+                if (idx === index) return theme.fg("accent", hasNote ? "◆" : "●");
+                return hasNote ? theme.fg("success", "●") : theme.fg("dim", "○");
+              })
               .join(" ");
 
             const { section, bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
@@ -1022,50 +1178,46 @@ export default function piKitExtension(pi: ExtensionAPI): void {
             const scrollStatus = maxScroll > 0
               ? `Lines ${firstVisibleLine}-${lastVisibleLine} / ${bodyLines.length}`
               : `Lines ${bodyLines.length}`;
+            const currentNote = notes.get(index)?.trim() || "";
+            const noteStatus = currentNote
+              ? theme.fg("success", "Composing in the shared editor below")
+              : theme.fg("dim", "Type in the shared editor below to leave feedback for this section");
 
             const content = [
               `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
-              row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length}`))),
+              row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length} • ${noteCount} note${noteCount === 1 ? "" : "s"}`))),
               row(theme.fg("text", theme.bold(section.title))),
               row(`${dots}`),
               row(theme.fg("dim", scrollStatus)),
+              row(noteStatus),
               row(),
               ...visibleBodyLines.map((line) => row(` ${line}`)),
               ...Array.from({ length: Math.max(0, visibleBodyRows - visibleBodyLines.length) }, () => row()),
               row(),
-              row(theme.fg("dim", "↑/↓ scroll • ←/→ section • Home/End • Esc close")),
+              row(theme.fg("dim", "Shared composer below • clear editor to clear note • Enter sends all notes")),
+              row(theme.fg("dim", "Esc closes pager • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll")),
+              `${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`,
             ];
 
-            while (content.length < availableRows - 1) {
-              content.push(row());
-            }
-
-            content.push(`${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`);
-            return content;
+            return content.slice(0, availableRows);
           },
 
           invalidate(): void {},
+          dispose(): void {
+            if (pagerTui === tui) pagerTui = null;
+          },
         };
       },
-      {
-        overlay: true,
-        overlayOptions: {
-          width: "100%",
-          height: "100%",
-          anchor: "top-left" as any,
-          margin: { top: 0, right: 0, bottom: 0, left: 0 },
-        },
-        onHandle: (handle) => {
-          activePagerOverlay = handle;
-        },
-      },
+      { placement: "aboveEditor" },
     );
+
+    requestRender();
   }
 
   function closeLongFormPager(_ctx: any): void {
-    if (activePagerOverlay) {
-      activePagerOverlay.hide();
-      activePagerOverlay = null;
+    if (activePagerUI) {
+      activePagerUI.close();
+      activePagerUI = null;
     }
   }
 
@@ -1295,13 +1447,13 @@ export default function piKitExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const sections = buildLongFormPagerFromLastAssistant(ctx);
-      if (!sections) {
+      const pager = buildLongFormPagerFromLastAssistant(ctx);
+      if (!pager) {
         ctx.ui.notify("No long assistant response found to paginate.", "warning");
         return;
       }
 
-      openLongFormPager(ctx, sections, 0);
+      openLongFormPager(ctx, pager, 0);
     },
   });
 
