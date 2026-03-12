@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { TextComposerSurface, type TextComposerPickerItem } from "./input-surfaces/text-composer";
-import { sharedInteractionDock, UI_LAYER_KEYS, type DockState } from "./shell";
+import { sharedInteractionDock, type DockState } from "./shell";
 import {
   FALLBACK_BUILT_IN_COMMANDS,
   PICKER_MAX_ITEMS,
@@ -116,10 +116,6 @@ async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> 
   threadIndex = await listSessions(ctx.sessionManager.getSessionFile());
   refreshBashHistory(ctx);
   pickerOpen = false;
-  pi.events.emit("ui:layer", {
-    key: UI_LAYER_KEYS.picker,
-    open: false,
-  });
 
   sharedInteractionDock.setInputHandler((data: string) => {
     const shouldCapture = Boolean(pickerOpen && activeEditor?.shouldCapturePickerKey(data));
@@ -146,10 +142,6 @@ async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> 
         onThreadInserted: () => showTransientBadge("THREAD INSERTED"),
         onPickerVisibilityChange: (open: boolean) => {
           pickerOpen = open;
-          pi.events.emit("ui:layer", {
-            key: UI_LAYER_KEYS.picker,
-            open,
-          });
         },
         onLayoutChange: (metrics) => {
           sharedInteractionDock.setMetrics(metrics);

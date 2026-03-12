@@ -1,6 +1,6 @@
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Key, Markdown, matchesKey, truncateToWidth as tuiTruncateToWidth } from "@mariozechner/pi-tui";
-import { UI_LAYER_KEYS, type InteractionDockController, type ScreenController } from "../shell";
+import type { InteractionDockController, ScreenController } from "../shell";
 
 export type LongFormSection = {
   title: string;
@@ -18,8 +18,6 @@ export type PagerScreenOptions = {
   pager: LongFormPagerContent;
   notes: Map<number, string>;
   startIndex?: number;
-  setLayerOpen: (key: string, open: boolean) => void;
-  isTopLayer: (key: string) => boolean;
   dock: InteractionDockController;
   formatFeedbackMessage: (pager: LongFormPagerContent, notes: Map<number, string>) => string | null;
   onSubmitMessage: (message: string) => void;
@@ -99,7 +97,6 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
     if (closed) return;
     closed = true;
     persistCurrentNote();
-    options.setLayerOpen(UI_LAYER_KEYS.pager, false);
 
     const tuiForClose = pagerTui;
     closeOverlay?.();
@@ -140,7 +137,6 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
   };
 
 
-  options.setLayerOpen(UI_LAYER_KEYS.pager, true);
   loadCurrentNote();
   ctx.ui.setStatus(
     "pager",
@@ -255,7 +251,6 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
     handleInput(data: string) {
       if (closed) return undefined;
       if (options.dock.blocksScreenInput()) return undefined;
-      if (!options.isTopLayer(UI_LAYER_KEYS.pager)) return undefined;
 
       const { maxScroll } = getPagerMetrics(lastRenderWidth);
 

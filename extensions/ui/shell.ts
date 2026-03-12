@@ -1,48 +1,10 @@
-export const UI_LAYER_KEYS = {
-  picker: "interaction-dock:picker",
-  pager: "screen:pager",
-  wizard: "screen:wizard",
-} as const;
-
 export const UI_EVENT_KEYS = {
   dockRefresh: "interaction-dock:refresh",
   dockStateChanged: "interaction-dock:state-changed",
   dockMetricsChanged: "interaction-dock:metrics-changed",
 } as const;
 
-export type UiLayerKey = (typeof UI_LAYER_KEYS)[keyof typeof UI_LAYER_KEYS] | string;
 export type InputRouteResult = { consume?: boolean; data?: string } | undefined;
-
-export class UiLayerStack {
-  private readonly stack: string[] = [];
-
-  setOpen(key: UiLayerKey, open: boolean): void {
-    const normalized = String(key || "").trim();
-    if (!normalized) return;
-
-    const idx = this.stack.indexOf(normalized);
-    if (open) {
-      if (idx >= 0) this.stack.splice(idx, 1);
-      this.stack.push(normalized);
-      return;
-    }
-
-    if (idx >= 0) this.stack.splice(idx, 1);
-  }
-
-  isTop(key: UiLayerKey): boolean {
-    const normalized = String(key || "").trim();
-    return this.stack.length === 0 || this.stack[this.stack.length - 1] === normalized;
-  }
-
-  top(): string | undefined {
-    return this.stack[this.stack.length - 1];
-  }
-
-  clear(): void {
-    this.stack.length = 0;
-  }
-}
 
 export type InputSurfaceKind = "text-composer" | "wizard" | "hidden";
 export type ScreenKind = "thread" | "pager" | "wizard";
@@ -216,6 +178,5 @@ export class InteractionDockController {
   }
 }
 
-export const sharedUiLayerStack = new UiLayerStack();
 export const sharedScreenManager = new ScreenManager();
 export const sharedInteractionDock = new InteractionDockController();

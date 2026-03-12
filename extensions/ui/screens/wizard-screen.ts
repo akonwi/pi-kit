@@ -1,5 +1,5 @@
 import { truncateToWidth as tuiTruncateToWidth } from "@mariozechner/pi-tui";
-import { UI_LAYER_KEYS, type InteractionDockController, type ScreenController } from "../shell";
+import type { InteractionDockController, ScreenController } from "../shell";
 import { WizardInputSurface, normalizeQuestion, type AnswerValue, type GuidedQuestionnaireInput } from "../input-surfaces/wizard-input";
 
 export type WizardResult = {
@@ -11,8 +11,6 @@ export type WizardScreenOptions = {
   ctx: any;
   params: GuidedQuestionnaireInput;
   dock: InteractionDockController;
-  setLayerOpen: (key: string, open: boolean) => void;
-  isTopLayer: (key: string) => boolean;
   setRenderDelegate: (delegate: { render(width: number): string[] } | undefined) => void;
   onClosed?: () => void;
 };
@@ -68,7 +66,6 @@ export function openWizardScreen(options: WizardScreenOptions): {
     surface?.dispose();
     surface = undefined;
     options.setRenderDelegate(undefined);
-    options.setLayerOpen(UI_LAYER_KEYS.wizard, false);
 
     const overlayTui = screenOverlayTui;
     closeScreenOverlay?.();
@@ -102,9 +99,6 @@ export function openWizardScreen(options: WizardScreenOptions): {
     },
   };
   options.setRenderDelegate(dockDelegate);
-
-  // Set up layer tracking
-  options.setLayerOpen(UI_LAYER_KEYS.wizard, true);
 
   if (intro) {
     ctx.ui.notify(`${title}: ${intro}`, "info");
@@ -192,7 +186,6 @@ export function openWizardScreen(options: WizardScreenOptions): {
 
     handleInput(data: string) {
       if (closed || !surface) return undefined;
-      if (!options.isTopLayer(UI_LAYER_KEYS.wizard)) return undefined;
 
       // Wizard captures ALL input
       surface.handleInput(data);

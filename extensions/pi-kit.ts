@@ -11,7 +11,7 @@ import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from
 import { createThreadScreen } from "./ui/screens/thread-screen";
 import { openWizardScreen } from "./ui/screens/wizard-screen";
 import { normalizeQuestion, type GuidedQuestion, type GuidedQuestionnaireInput } from "./ui/input-surfaces/wizard-input";
-import { sharedInteractionDock, sharedScreenManager, sharedUiLayerStack, UI_EVENT_KEYS, UI_LAYER_KEYS } from "./ui/shell";
+import { sharedInteractionDock, sharedScreenManager, UI_EVENT_KEYS } from "./ui/shell";
 
 type KitConfig = {
   bells: {
@@ -550,7 +550,6 @@ function buildLongFormPagerFromLastAssistant(ctx: any): LongFormPagerContent | n
 export default function piKitExtension(pi: ExtensionAPI): void {
   let currentConfig: KitConfig = sanitizeConfig(DEFAULT_CONFIG);
   let removeScreenInputRouter: (() => void) | undefined;
-  const uiLayerStack = sharedUiLayerStack;
   const screenManager = sharedScreenManager;
   const dockController = sharedInteractionDock;
 
@@ -572,15 +571,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     screenManager.activate(createThreadScreen(dockController));
   };
 
-  function setUiLayerOpen(key: string, open: boolean): void {
-    uiLayerStack.setOpen(key, open);
-    screenManager.requestRender();
-  }
-
-  function isTopUiLayer(key: string): boolean {
-    return uiLayerStack.isTop(key);
-  }
-
   function openLongFormPager(ctx: any, pager: LongFormPagerContent, startIndex = 0): void {
     const { sections } = pager;
     if (!ctx.hasUI || sections.length < 2) return;
@@ -592,8 +582,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       pager,
       notes,
       startIndex,
-      setLayerOpen: setUiLayerOpen,
-      isTopLayer: isTopUiLayer,
       dock: dockController,
       formatFeedbackMessage: formatPagerFeedbackMessage,
       onSubmitMessage: (message: string) => {
@@ -644,8 +632,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       ctx,
       params: { ...params, questions },
       dock: dockController,
-      setLayerOpen: setUiLayerOpen,
-      isTopLayer: isTopUiLayer,
       setRenderDelegate: setActiveEditorRenderDelegate,
       onClosed: () => {
         screenManager.clearIfActive(screen);
@@ -688,12 +674,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       },
     };
   }
-
-  pi.events.on("ui:layer", (data?: { key?: string; open?: boolean }) => {
-    const key = typeof data?.key === "string" ? data.key : "";
-    if (!key) return;
-    setUiLayerOpen(key, Boolean(data?.open));
-  });
 
   pi.events.on(UI_EVENT_KEYS.dockMetricsChanged, (metrics) => {
     if (!metrics) return;
@@ -781,11 +761,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       const nextData = dockResult?.data !== undefined ? dockResult.data : data;
 
       if (dockController.blocksScreenInput()) {
-        return undefined;
-      }
-
-      const topLayer = uiLayerStack.top();
-      if (topLayer && topLayer !== UI_LAYER_KEYS.pager && topLayer !== UI_LAYER_KEYS.wizard) {
         return undefined;
       }
 
