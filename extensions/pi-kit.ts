@@ -5,10 +5,12 @@ import path from "node:path";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { Input, isKeyRelease, Key, matchesKey, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
-import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, setThreadReferenceDockState } from "./ui/thread-reference-shell";
+import { isKeyRelease, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
+import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
 import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
 import { createThreadScreen } from "./ui/screens/thread-screen";
+import { openWizardScreen } from "./ui/screens/wizard-screen";
+import { normalizeQuestion, type GuidedQuestion, type GuidedQuestionnaireInput } from "./ui/input-surfaces/wizard-input";
 import { sharedInteractionDock, sharedScreenManager, sharedUiLayerStack, UI_EVENT_KEYS, UI_LAYER_KEYS } from "./ui/shell";
 
 type KitConfig = {
@@ -344,49 +346,12 @@ function parseHandoffArgs(args: string | undefined): { stay: boolean; prompt: st
   return { stay, prompt };
 }
 
-type GuidedQuestion = {
-  id: string;
-  kind?: "text" | "select" | "boolean";
-  label: string;
-  help?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: string[];
-};
-
-type GuidedQuestionnaireInput = {
-  title?: string;
-  intro?: string;
-  questions: GuidedQuestion[];
-};
-
 const GUIDED_QUESTIONS_POLICY = [
   "When you need clarification from the user and there are 2 or more missing inputs, call guided_questions instead of asking a long list in plain chat.",
   "Keep questions short and concrete.",
   "Prefer select/boolean questions when possible, and only use free text when necessary.",
   "After guided_questions returns, proceed using details.answers as source-of-truth.",
 ].join("\n");
-
-function normalizeQuestion(raw: GuidedQuestion, index: number): GuidedQuestion {
-  const kind = raw.kind === "select" || raw.kind === "boolean" || raw.kind === "text"
-    ? raw.kind
-    : "text";
-
-  const id = String(raw.id || `q${index + 1}`).trim() || `q${index + 1}`;
-  const label = String(raw.label || "").trim() || `Question ${index + 1}`;
-
-  return {
-    id,
-    kind,
-    label,
-    help: typeof raw.help === "string" ? raw.help.trim() : undefined,
-    placeholder: typeof raw.placeholder === "string" ? raw.placeholder : undefined,
-    required: raw.required !== false,
-    options: Array.isArray(raw.options)
-      ? raw.options.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 24)
-      : undefined,
-  };
-}
 
 function extractQuestionsFromAssistantText(text: string): string[] {
   const out: string[] = [];
@@ -582,375 +547,6 @@ function buildLongFormPagerFromLastAssistant(ctx: any): LongFormPagerContent | n
   return sections.length >= 2 ? { sessionId, entryId: lastAssistantEntryId, sections } : null;
 }
 
-async function runGuidedQuestionnaire(
-  ctx: any,
-  params: GuidedQuestionnaireInput,
-): Promise<{
-  contentText: string;
-  details: Record<string, unknown>;
-}> {
-  if (!ctx.hasUI) {
-    return {
-      contentText: "guided_questions requires interactive mode with UI.",
-      details: { cancelled: true, reason: "no-ui" },
-    };
-  }
-
-  const title = typeof params.title === "string" && params.title.trim() ? params.title.trim() : "Guided questionnaire";
-  const intro = typeof params.intro === "string" && params.intro.trim() ? params.intro.trim() : "";
-  const questions = (Array.isArray(params.questions) ? params.questions : []).map(normalizeQuestion);
-
-  if (questions.length === 0) {
-    return {
-      contentText: "No questions were provided.",
-      details: { cancelled: true, reason: "empty" },
-    };
-  }
-
-  type AnswerValue = string | boolean;
-
-  const interaction = await ctx.ui.custom<{ cancelled: boolean; answers: Record<string, AnswerValue> } | null>(
-    (tui, theme, _kb, done) => {
-      class WizardComponent {
-        private _focused = false;
-        private index = 0;
-        private selectIndex = 0;
-        private mode: "select" | "text" | "otherText" = "select";
-        private answers: Record<string, AnswerValue> = {};
-        private input = new Input();
-
-        get focused(): boolean {
-          return this._focused;
-        }
-
-        set focused(value: boolean) {
-          this._focused = value;
-          this.input.focused = value;
-        }
-
-        constructor() {
-          if (intro) {
-            ctx.ui.notify(`${title}: ${intro}`, "info");
-          }
-          this.loadQuestionState();
-        }
-
-        private getQuestion() {
-          return questions[this.index]!;
-        }
-
-        private isOtherOption(value: string): boolean {
-          return /^other(\b|\s|:)/i.test(value);
-        }
-
-        private getSelectOptions(q: GuidedQuestion): string[] {
-          if (q.kind === "boolean") {
-            return q.required === false ? ["Yes", "No", "Skip"] : ["Yes", "No"];
-          }
-
-          if (q.kind === "select") {
-            const provided = Array.isArray(q.options) ? q.options.filter(Boolean) : [];
-            return q.required === false ? [...provided, "Skip"] : provided;
-          }
-
-          return [];
-        }
-
-        private loadQuestionState(): void {
-          const q = this.getQuestion();
-          const existing = this.answers[q.id];
-
-          if (q.kind === "text") {
-            this.mode = "text";
-            this.input.setValue(typeof existing === "string" ? existing : "");
-            return;
-          }
-
-          if (q.kind === "boolean") {
-            this.mode = "select";
-            const opts = this.getSelectOptions(q);
-            if (existing === true) this.selectIndex = opts.indexOf("Yes");
-            else if (existing === false) this.selectIndex = opts.indexOf("No");
-            else if (typeof existing === "string" && existing === "") this.selectIndex = Math.max(0, opts.indexOf("Skip"));
-            else this.selectIndex = 0;
-            if (this.selectIndex < 0) this.selectIndex = 0;
-            return;
-          }
-
-          const opts = this.getSelectOptions(q);
-          if (opts.length === 0) {
-            this.mode = "text";
-            this.input.setValue(typeof existing === "string" ? existing : "");
-            return;
-          }
-
-          this.mode = "select";
-          this.selectIndex = 0;
-          if (typeof existing === "string") {
-            const exactIdx = opts.indexOf(existing);
-            if (exactIdx >= 0) {
-              this.selectIndex = exactIdx;
-              return;
-            }
-
-            const otherIdx = opts.findIndex((o) => this.isOtherOption(o));
-            if (otherIdx >= 0 && existing.trim()) {
-              this.mode = "otherText";
-              this.selectIndex = otherIdx;
-              this.input.setValue(existing);
-              return;
-            }
-          }
-        }
-
-        private movePrevious(): void {
-          if (this.mode === "otherText") {
-            this.mode = "select";
-            return;
-          }
-          if (this.index === 0) {
-            ctx.ui.notify("Already at first question.", "info");
-            return;
-          }
-          this.index -= 1;
-          this.loadQuestionState();
-        }
-
-        private moveNext(): void {
-          const q = this.getQuestion();
-
-          if (q.kind === "text") {
-            const value = this.input.getValue().trim();
-            if (!value && q.required !== false) {
-              ctx.ui.notify("This question is required.", "warning");
-              return;
-            }
-            this.answers[q.id] = value;
-            this.advance();
-            return;
-          }
-
-          if (q.kind === "boolean") {
-            const opts = this.getSelectOptions(q);
-            const choice = opts[this.selectIndex];
-            if (!choice) return;
-            if (choice === "Skip") this.answers[q.id] = "";
-            else this.answers[q.id] = choice === "Yes";
-            this.advance();
-            return;
-          }
-
-          const opts = this.getSelectOptions(q);
-          if (opts.length === 0 || this.mode === "text") {
-            const value = this.input.getValue().trim();
-            if (!value && q.required !== false) {
-              ctx.ui.notify("This question is required.", "warning");
-              return;
-            }
-            this.answers[q.id] = value;
-            this.advance();
-            return;
-          }
-
-          if (this.mode === "otherText") {
-            const value = this.input.getValue().trim();
-            if (!value && q.required !== false) {
-              ctx.ui.notify("Please provide your custom option.", "warning");
-              return;
-            }
-            this.answers[q.id] = value || "Other";
-            this.advance();
-            return;
-          }
-
-          const choice = opts[this.selectIndex];
-          if (!choice) return;
-
-          if (choice === "Skip") {
-            this.answers[q.id] = "";
-            this.advance();
-            return;
-          }
-
-          if (this.isOtherOption(choice)) {
-            this.mode = "otherText";
-            const existing = this.answers[q.id];
-            this.input.setValue(typeof existing === "string" && opts.indexOf(existing) === -1 ? existing : "");
-            return;
-          }
-
-          this.answers[q.id] = choice;
-          this.advance();
-        }
-
-        private advance(): void {
-          if (this.index >= questions.length - 1) {
-            done({ cancelled: false, answers: this.answers });
-            return;
-          }
-          this.index += 1;
-          this.loadQuestionState();
-        }
-
-        handleInput(data: string): void {
-          if (matchesKey(data, Key.escape)) {
-            done({ cancelled: true, answers: this.answers });
-            return;
-          }
-
-          if (matchesKey(data, Key.shift("tab"))) {
-            this.movePrevious();
-            tui.requestRender();
-            return;
-          }
-
-          if (matchesKey(data, Key.tab)) {
-            this.moveNext();
-            tui.requestRender();
-            return;
-          }
-
-          const q = this.getQuestion();
-          const isTextMode = q.kind === "text" || this.mode === "text" || this.mode === "otherText";
-
-          if (isTextMode) {
-            if (matchesKey(data, Key.enter)) {
-              this.moveNext();
-              tui.requestRender();
-              return;
-            }
-            this.input.handleInput(data);
-            tui.requestRender();
-            return;
-          }
-
-          const opts = this.getSelectOptions(q);
-          if (matchesKey(data, Key.up)) {
-            if (opts.length > 0) this.selectIndex = Math.max(0, this.selectIndex - 1);
-            tui.requestRender();
-            return;
-          }
-          if (matchesKey(data, Key.down)) {
-            if (opts.length > 0) this.selectIndex = Math.min(opts.length - 1, this.selectIndex + 1);
-            tui.requestRender();
-            return;
-          }
-          if (matchesKey(data, Key.enter)) {
-            this.moveNext();
-            tui.requestRender();
-          }
-        }
-
-        render(width: number): string[] {
-          const q = this.getQuestion();
-          const lines: string[] = [];
-
-          const panelInside = Math.max(24, width - 2);
-          const ansiLen = (s: string) => s
-            .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-            .replace(/\x1b_[\s\S]*?(?:\x07|\x1b\\)/g, "")
-            .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
-            .replace(/[\x00-\x1F\x7F]/g, "")
-            .length;
-          const fit = (s: string) => {
-            const truncated = tuiTruncateToWidth(s, panelInside);
-            const len = ansiLen(truncated);
-            return len >= panelInside ? truncated : `${truncated}${" ".repeat(panelInside - len)}`;
-          };
-          const row = (content = "") => `${theme.fg("border", "│")}${fit(content)}${theme.fg("border", "│")}`;
-
-          const answeredCount = questions.filter((question) => {
-            const value = this.answers[question.id];
-            if (typeof value === "boolean") return true;
-            return typeof value === "string" && value.trim().length > 0;
-          }).length;
-
-          const progressDots = questions
-            .map((_, idx) => {
-              if (idx === this.index) return theme.fg("accent", "●");
-              return idx < this.index ? theme.fg("success", "●") : theme.fg("dim", "○");
-            })
-            .join(" ");
-
-          const prevValue = this.answers[q.id];
-          const prevAnswer = typeof prevValue === "boolean"
-            ? (prevValue ? "Yes" : "No")
-            : (typeof prevValue === "string" && prevValue.trim() ? prevValue.trim() : "");
-
-          lines.push(`${theme.fg("borderAccent", "╭")}${theme.fg("borderAccent", "─".repeat(panelInside))}${theme.fg("borderAccent", "╮")}`);
-          lines.push(row(`${theme.fg("accent", theme.bold(title))}`));
-          lines.push(row(`${theme.fg("dim", `Question ${this.index + 1}/${questions.length} • ${answeredCount} answered`)}  ${progressDots}`));
-          lines.push(row(theme.fg("text", q.label)));
-          if (q.help) lines.push(row(theme.fg("muted", q.help)));
-          if (prevAnswer) lines.push(row(theme.fg("dim", `Current: ${clip(prevAnswer, 80)}`)));
-          lines.push(row());
-
-          const isTextMode = q.kind === "text" || this.mode === "text" || this.mode === "otherText";
-
-          if (isTextMode) {
-            const prompt = this.mode === "otherText"
-              ? theme.fg("accent", "Specify Other")
-              : theme.fg("dim", "Answer");
-            lines.push(row(`${prompt}${theme.fg("dim", ":")}`));
-            for (const line of this.input.render(Math.max(10, panelInside - 2))) {
-              lines.push(row(` ${line}`));
-            }
-          } else {
-            const opts = this.getSelectOptions(q);
-            for (let i = 0; i < opts.length; i++) {
-              const selected = i === this.selectIndex;
-              const prefix = selected ? theme.fg("accent", "› ") : "  ";
-              const text = selected ? theme.fg("accent", opts[i]!) : opts[i]!;
-              lines.push(row(`${prefix}${text}`));
-            }
-          }
-
-          lines.push(row());
-          lines.push(row(theme.fg("dim", "↑/↓ move • Enter/Tab next • Shift+Tab previous • Esc cancel")));
-          lines.push(`${theme.fg("borderAccent", "╰")}${theme.fg("borderAccent", "─".repeat(panelInside))}${theme.fg("borderAccent", "╯")}`);
-          return lines;
-        }
-
-        invalidate(): void {
-          this.input.invalidate();
-        }
-      }
-
-      return new WizardComponent();
-    },
-  );
-
-  const answers = interaction?.answers || {};
-  if (!interaction || interaction.cancelled) {
-    return {
-      contentText: "Questionnaire cancelled.",
-      details: {
-        cancelled: true,
-        answers,
-        answeredCount: Object.keys(answers).length,
-        totalQuestions: questions.length,
-      },
-    };
-  }
-
-  const summaryLines = questions.map((q) => {
-    const value = answers[q.id];
-    const rendered = typeof value === "boolean" ? (value ? "Yes" : "No") : (String(value || "").trim() || "(skipped)");
-    return `- ${q.label}: ${rendered}`;
-  });
-
-  return {
-    contentText: [`${title} complete.`, "", ...summaryLines].join("\n"),
-    details: {
-      title,
-      answers,
-      answeredCount: Object.keys(answers).length,
-      totalQuestions: questions.length,
-      completed: true,
-    },
-  };
-}
-
 export default function piKitExtension(pi: ExtensionAPI): void {
   let currentConfig: KitConfig = sanitizeConfig(DEFAULT_CONFIG);
   let removeScreenInputRouter: (() => void) | undefined;
@@ -1020,6 +616,77 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   function closeLongFormPager(_ctx: any): void {
     screenManager.closeActive();
     activateThreadScreen();
+  }
+
+  async function runGuidedQuestionnaire(
+    ctx: any,
+    params: GuidedQuestionnaireInput,
+  ): Promise<{
+    contentText: string;
+    details: Record<string, unknown>;
+  }> {
+    if (!ctx.hasUI) {
+      return {
+        contentText: "guided_questions requires interactive mode with UI.",
+        details: { cancelled: true, reason: "no-ui" },
+      };
+    }
+
+    const questions = (Array.isArray(params.questions) ? params.questions : []).map(normalizeQuestion);
+    if (questions.length === 0) {
+      return {
+        contentText: "No questions were provided.",
+        details: { cancelled: true, reason: "empty" },
+      };
+    }
+
+    const { screen, result } = openWizardScreen({
+      ctx,
+      params: { ...params, questions },
+      dock: dockController,
+      setLayerOpen: setUiLayerOpen,
+      isTopLayer: isTopUiLayer,
+      setRenderDelegate: setActiveEditorRenderDelegate,
+      onClosed: () => {
+        screenManager.clearIfActive(screen);
+        activateThreadScreen();
+      },
+    });
+    screenManager.activate(screen);
+
+    const wizardResult = await result;
+
+    const title = typeof params.title === "string" && params.title.trim() ? params.title.trim() : "Guided questionnaire";
+    const answers = wizardResult.answers;
+
+    if (wizardResult.cancelled) {
+      return {
+        contentText: "Questionnaire cancelled.",
+        details: {
+          cancelled: true,
+          answers,
+          answeredCount: Object.keys(answers).length,
+          totalQuestions: questions.length,
+        },
+      };
+    }
+
+    const summaryLines = questions.map((q) => {
+      const value = answers[q.id];
+      const rendered = typeof value === "boolean" ? (value ? "Yes" : "No") : (String(value || "").trim() || "(skipped)");
+      return `- ${q.label}: ${rendered}`;
+    });
+
+    return {
+      contentText: [`${title} complete.`, "", ...summaryLines].join("\n"),
+      details: {
+        title,
+        answers,
+        answeredCount: Object.keys(answers).length,
+        totalQuestions: questions.length,
+        completed: true,
+      },
+    };
   }
 
   pi.events.on("ui:layer", (data?: { key?: string; open?: boolean }) => {
@@ -1118,7 +785,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       }
 
       const topLayer = uiLayerStack.top();
-      if (topLayer && topLayer !== UI_LAYER_KEYS.pager) {
+      if (topLayer && topLayer !== UI_LAYER_KEYS.pager && topLayer !== UI_LAYER_KEYS.wizard) {
         return undefined;
       }
 

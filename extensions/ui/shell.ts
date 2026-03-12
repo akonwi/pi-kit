@@ -1,6 +1,7 @@
 export const UI_LAYER_KEYS = {
   picker: "interaction-dock:picker",
   pager: "screen:pager",
+  wizard: "screen:wizard",
 } as const;
 
 export const UI_EVENT_KEYS = {

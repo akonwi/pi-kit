@@ -181,6 +181,10 @@ export function setThreadReferenceDockState(state: DockState): void {
   requestThreadReferenceRender();
 }
 
+export function setActiveEditorRenderDelegate(delegate: { render(width: number): string[] } | undefined): void {
+  activeEditor?.setRenderDelegate(delegate);
+}
+
 export function handleThreadReferenceUserBash(event: { command?: string }, ctx: any): void {
   if (typeof event.command === "string" && event.command.trim()) {
     pushBashHistory(event.command);

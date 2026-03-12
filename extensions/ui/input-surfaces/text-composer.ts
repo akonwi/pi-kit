@@ -86,6 +86,7 @@ export class TextComposerSurface extends CustomEditor {
   private readonly getTransientBadge: () => string | undefined;
   private readonly onThreadInserted: () => void;
   private readonly onLayoutChange: (metrics: DockMetrics) => void;
+  private renderDelegate?: { render(width: number): string[] };
   private dockState: DockState = {
     surface: "text-composer",
     mode: "thread",
@@ -148,6 +149,14 @@ export class TextComposerSurface extends CustomEditor {
 
   dispose(): void {
     this.pickerOverlay.dispose();
+  }
+
+  setRenderDelegate(delegate: { render(width: number): string[] } | undefined): void {
+    this.renderDelegate = delegate;
+    if (delegate) {
+      this.setPicker(undefined);
+    }
+    this.tui.requestRender();
   }
 
   setDockState(next: DockState): void {
@@ -334,6 +343,22 @@ export class TextComposerSurface extends CustomEditor {
   }
 
   override render(width: number): string[] {
+    if (this.renderDelegate) {
+      const margin = this.panelMargin(width);
+      const panelWidth = Math.max(24, width - margin * 2);
+      const delegateLines = this.renderDelegate.render(panelWidth);
+      const pad = " ".repeat(margin);
+      const padded = delegateLines.map((line) => `${pad}${line}${pad}`);
+      this.lastPanelLayout = { margin, panelWidth, panelLines: padded.length };
+      const layoutKey = JSON.stringify(this.lastPanelLayout);
+      if (this.lastReportedLayoutKey !== layoutKey) {
+        this.lastReportedLayoutKey = layoutKey;
+        this.onLayoutChange(this.lastPanelLayout);
+      }
+      this.pickerOverlay.hide();
+      return padded;
+    }
+
     const margin = this.panelMargin(width);
     const panelWidth = Math.max(24, width - margin * 2);
     const panelInside = Math.max(10, panelWidth - 2);
