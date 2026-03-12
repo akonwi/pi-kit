@@ -2,10 +2,14 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { SessionManager, getMarkdownTheme, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { Input, Key, Markdown, matchesKey, truncateToWidth as tuiTruncateToWidth } from "@mariozechner/pi-tui";
+import { Input, isKeyRelease, Key, matchesKey, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
+import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, setThreadReferenceDockState } from "./ui/thread-reference-shell";
+import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
+import { createThreadScreen } from "./ui/screens/thread-screen";
+import { sharedInteractionDock, sharedScreenManager, sharedUiLayerStack, UI_EVENT_KEYS, UI_LAYER_KEYS } from "./ui/shell";
 
 type KitConfig = {
   bells: {
@@ -50,18 +54,6 @@ const AUTO_TITLE_DISABLED = process.env.PI_KIT_NO_AUTO_TITLE === "1";
 const LONGFORM_MIN_CHARS = 900;
 const LONGFORM_MAX_SECTIONS = 12;
 const LONGFORM_SECTION_MAX_CHARS = 1200;
-const LONGFORM_WIDGET_MAX_LINES = 16;
-
-type LongFormSection = {
-  title: string;
-  body: string;
-};
-
-type LongFormPagerContent = {
-  sessionId: string;
-  entryId: string;
-  sections: LongFormSection[];
-};
 
 const pagerNotesByEntryId = new Map<string, Map<number, string>>();
 
@@ -168,26 +160,25 @@ function deriveFooterSessionLabel(ctx: any): string {
 }
 
 function visibleWidth(text: string): number {
-  const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
-  return plain.length;
+  return tuiVisibleWidth(text);
 }
 
-function truncateToWidth(text: string, width: number): string {
+function truncateToWidth(text: string, width: number, pad = false): string {
   if (width <= 0) return "";
-  const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
-  if (plain.length <= width) return plain;
-  return plain.slice(0, width);
+  return tuiTruncateToWidth(text, width, "", pad);
 }
 
 function padBetween(left: string, right: string, width: number): string {
+  if (width <= 0) return "";
   const spacing = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
-  return truncateToWidth(`${left}${" ".repeat(spacing)}${right}`, width);
+  return truncateToWidth(`${left}${" ".repeat(spacing)}${right}`, width, true);
 }
 
 function withHorizontalPadding(line: string, totalWidth: number, pad: number): string {
-  const safePad = Math.max(0, pad);
-  const innerWidth = Math.max(1, totalWidth - safePad * 2);
-  const inner = truncateToWidth(line, innerWidth);
+  if (totalWidth <= 0) return "";
+  const safePad = Math.max(0, Math.min(pad, Math.floor(totalWidth / 2)));
+  const innerWidth = Math.max(0, totalWidth - safePad * 2);
+  const inner = innerWidth > 0 ? truncateToWidth(line, innerWidth, true) : "";
   return `${" ".repeat(safePad)}${inner}${" ".repeat(safePad)}`;
 }
 
@@ -962,264 +953,85 @@ async function runGuidedQuestionnaire(
 
 export default function piKitExtension(pi: ExtensionAPI): void {
   let currentConfig: KitConfig = sanitizeConfig(DEFAULT_CONFIG);
-  let activePagerUI: { close: () => void; requestRender: () => void } | null = null;
+  let removeScreenInputRouter: (() => void) | undefined;
+  const uiLayerStack = sharedUiLayerStack;
+  const screenManager = sharedScreenManager;
+  const dockController = sharedInteractionDock;
+
+  dockController.configure({
+    onRefresh: () => {
+      refreshThreadReferenceComposer();
+      pi.events.emit(UI_EVENT_KEYS.dockRefresh);
+    },
+    onStateChange: (state) => {
+      setThreadReferenceDockState(state);
+      pi.events.emit(UI_EVENT_KEYS.dockStateChanged, state);
+    },
+    onMetricsChange: (metrics) => {
+      pi.events.emit(UI_EVENT_KEYS.dockMetricsChanged, metrics);
+    },
+  });
+
+  const activateThreadScreen = () => {
+    screenManager.activate(createThreadScreen(dockController));
+  };
+
+  function setUiLayerOpen(key: string, open: boolean): void {
+    uiLayerStack.setOpen(key, open);
+    screenManager.requestRender();
+  }
+
+  function isTopUiLayer(key: string): boolean {
+    return uiLayerStack.isTop(key);
+  }
 
   function openLongFormPager(ctx: any, pager: LongFormPagerContent, startIndex = 0): void {
     const { sections } = pager;
     if (!ctx.hasUI || sections.length < 2) return;
 
-    if (activePagerUI) {
-      activePagerUI.close();
-      activePagerUI = null;
-    }
-
     const notes = getPagerNotes(pager.sessionId, pager.entryId);
-    let index = Math.max(0, Math.min(sections.length - 1, startIndex));
-    let scrollOffset = 0;
-    let lastRenderWidth = Math.max(24, (process.stdout.columns || 80) - 2);
-    let isSubmittingNotes = false;
-    const previousEditorText = ctx.ui.getEditorText();
-    let pagerTui: any = null;
-    let closed = false;
-    let lastSectionNavDirection: "next" | "prev" | null = null;
-    let lastSectionNavAt = 0;
-
-    const persistCurrentNote = () => {
-      const normalized = ctx.ui.getEditorText().trim();
-      if (normalized) notes.set(index, normalized);
-      else notes.delete(index);
-    };
-
-    const loadCurrentNote = () => {
-      ctx.ui.setEditorText(notes.get(index) || "");
-    };
-
-    const requestRender = () => {
-      pagerTui?.requestRender?.();
-    };
-
-    const getPagerMetrics = (inside: number) => {
-      const section = sections[index]!;
-      const md = new Markdown(section.body, 0, 0, getMarkdownTheme(), {
-        color: (text: string) => ctx.ui.theme.fg("text", text),
-      });
-      const bodyLines = md.render(Math.max(12, inside - 4));
-      const termRows = process.stdout.rows || 40;
-      const availableRows = Math.max(8, termRows - 10);
-      const visibleBodyRows = Math.max(4, availableRows - 8);
-      const maxScroll = Math.max(0, bodyLines.length - visibleBodyRows);
-
-      return { section, bodyLines, availableRows, visibleBodyRows, maxScroll };
-    };
-
-    const moveToSection = (nextIndex: number, direction: "next" | "prev") => {
-      if (nextIndex === index) return;
-
-      const now = Date.now();
-      if (lastSectionNavDirection === direction && now - lastSectionNavAt < 75) {
-        return;
-      }
-      lastSectionNavDirection = direction;
-      lastSectionNavAt = now;
-
-      persistCurrentNote();
-      index = nextIndex;
-      scrollOffset = 0;
-      loadCurrentNote();
-      requestRender();
-    };
-
-    const closePager = (restoreEditor = true) => {
-      if (closed) return;
-      closed = true;
-      persistCurrentNote();
-      unsubscribeInput();
-      ctx.ui.setWidget("pi-kit-pager", undefined);
-      ctx.ui.setStatus("pager", undefined);
-      if (restoreEditor) ctx.ui.setEditorText(previousEditorText);
-      if (activePagerUI === pagerUI) activePagerUI = null;
-    };
-
-    const submitSectionNotes = () => {
-      if (isSubmittingNotes) return;
-
-      persistCurrentNote();
-      const message = formatPagerFeedbackMessage(pager, notes);
-      if (!message) {
-        ctx.ui.notify("No section feedback to send yet.", "warning");
-        return;
-      }
-
-      isSubmittingNotes = true;
-
-      try {
+    let screen: ReturnType<typeof openPagerScreen>;
+    screen = openPagerScreen({
+      ctx,
+      pager,
+      notes,
+      startIndex,
+      setLayerOpen: setUiLayerOpen,
+      isTopLayer: isTopUiLayer,
+      dock: dockController,
+      formatFeedbackMessage: formatPagerFeedbackMessage,
+      onSubmitMessage: (message: string) => {
         pagerNotesByEntryId.delete(`${pager.sessionId}:${pager.entryId}`);
-        closePager(true);
         if (ctx.isIdle()) {
           pi.sendUserMessage(message);
         } else {
           pi.sendUserMessage(message, { deliverAs: "followUp" });
           ctx.ui.notify("Grouped section feedback queued.", "info");
         }
-      } catch (error) {
-        isSubmittingNotes = false;
-        const detail = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(`Failed to send feedback: ${detail}`, "error");
-        requestRender();
-      }
-    };
-
-    const scheduleSync = () => {
-      queueMicrotask(() => {
-        if (closed) return;
-        persistCurrentNote();
-        requestRender();
-      });
-    };
-
-    const unsubscribeInput = ctx.ui.onTerminalInput((data: string) => {
-      if (closed) return undefined;
-
-      const { maxScroll } = getPagerMetrics(lastRenderWidth);
-
-      if (matchesKey(data, Key.escape)) {
-        closePager(true);
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.enter) || matchesKey(data, Key.ctrl("s"))) {
-        submitSectionNotes();
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+right"))) {
-        if (index < sections.length - 1) moveToSection(index + 1, "next");
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+left"))) {
-        if (index > 0) moveToSection(index - 1, "prev");
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+up"))) {
-        if (scrollOffset > 0) scrollOffset -= 1;
-        requestRender();
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+down"))) {
-        if (scrollOffset < maxScroll) scrollOffset += 1;
-        requestRender();
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+home"))) {
-        scrollOffset = 0;
-        requestRender();
-        return { consume: true };
-      }
-      if (matchesKey(data, Key.ctrl("shift+end"))) {
-        scrollOffset = maxScroll;
-        requestRender();
-        return { consume: true };
-      }
-
-      scheduleSync();
-      return undefined;
-    });
-
-    const pagerUI = {
-      close: () => closePager(true),
-      requestRender,
-    };
-
-    activePagerUI = pagerUI;
-    loadCurrentNote();
-    ctx.ui.setStatus(
-      "pager",
-      ctx.ui.theme.fg("dim", "pager: Enter send • Esc close • clear editor to clear note • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll"),
-    );
-
-    ctx.ui.setWidget(
-      "pi-kit-pager",
-      (tui: any, theme: any) => {
-        pagerTui = tui;
-
-        return {
-          render(width: number): string[] {
-            const inside = Math.max(24, width - 2);
-            lastRenderWidth = inside;
-
-            const stripAnsi = (s: string) => s
-              .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-              .replace(/\x1b_[\s\S]*?(?:\x07|\x1b\\)/g, "")
-              .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
-              .replace(/[\x00-\x1F\x7F]/g, "");
-            const fit = (s: string) => {
-              const truncated = tuiTruncateToWidth(s, inside);
-              const plain = stripAnsi(truncated);
-              return plain.length >= inside ? truncated : `${truncated}${" ".repeat(inside - plain.length)}`;
-            };
-            const bc = (s: string) => theme.fg("borderAccent", s);
-            const row = (content = "") => `${bc("│")}${fit(content)}${bc("│")}`;
-
-            const noteCount = countPagerNotes(notes);
-            const dots = sections
-              .map((_, idx) => {
-                const hasNote = Boolean(notes.get(idx)?.trim());
-                if (idx === index) return theme.fg("accent", hasNote ? "◆" : "●");
-                return hasNote ? theme.fg("success", "●") : theme.fg("dim", "○");
-              })
-              .join(" ");
-
-            const { section, bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
-            scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
-
-            const visibleBodyLines = bodyLines.slice(scrollOffset, scrollOffset + visibleBodyRows);
-            const firstVisibleLine = bodyLines.length === 0 ? 0 : scrollOffset + 1;
-            const lastVisibleLine = bodyLines.length === 0
-              ? 0
-              : Math.min(bodyLines.length, scrollOffset + visibleBodyLines.length);
-            const scrollStatus = maxScroll > 0
-              ? `Lines ${firstVisibleLine}-${lastVisibleLine} / ${bodyLines.length}`
-              : `Lines ${bodyLines.length}`;
-            const currentNote = notes.get(index)?.trim() || "";
-            const noteStatus = currentNote
-              ? theme.fg("success", "Composing in the shared editor below")
-              : theme.fg("dim", "Type in the shared editor below to leave feedback for this section");
-
-            const content = [
-              `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
-              row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length} • ${noteCount} note${noteCount === 1 ? "" : "s"}`))),
-              row(theme.fg("text", theme.bold(section.title))),
-              row(`${dots}`),
-              row(theme.fg("dim", scrollStatus)),
-              row(noteStatus),
-              row(),
-              ...visibleBodyLines.map((line) => row(` ${line}`)),
-              ...Array.from({ length: Math.max(0, visibleBodyRows - visibleBodyLines.length) }, () => row()),
-              row(),
-              row(theme.fg("dim", "Shared composer below • clear editor to clear note • Enter sends all notes")),
-              row(theme.fg("dim", "Esc closes pager • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll")),
-              `${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`,
-            ];
-
-            return content.slice(0, availableRows);
-          },
-
-          invalidate(): void {},
-          dispose(): void {
-            if (pagerTui === tui) pagerTui = null;
-          },
-        };
       },
-      { placement: "aboveEditor" },
-    );
-
-    requestRender();
+      onClosed: () => {
+        screenManager.clearIfActive(screen);
+        activateThreadScreen();
+      },
+    });
+    screenManager.activate(screen);
   }
 
   function closeLongFormPager(_ctx: any): void {
-    if (activePagerUI) {
-      activePagerUI.close();
-      activePagerUI = null;
-    }
+    screenManager.closeActive();
+    activateThreadScreen();
   }
+
+  pi.events.on("ui:layer", (data?: { key?: string; open?: boolean }) => {
+    const key = typeof data?.key === "string" ? data.key : "";
+    if (!key) return;
+    setUiLayerOpen(key, Boolean(data?.open));
+  });
+
+  pi.events.on(UI_EVENT_KEYS.dockMetricsChanged, (metrics) => {
+    if (!metrics) return;
+    dockController.setMetrics(metrics);
+  });
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!ctx.hasUI) return;
@@ -1288,14 +1100,57 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     installFooter(ctx);
   }
 
+  function installScreenInputRouter(ctx: any): void {
+    if (!ctx.hasUI) return;
+    removeScreenInputRouter?.();
+    removeScreenInputRouter = ctx.ui.onTerminalInput((data: string) => {
+      if (isKeyRelease(data)) {
+        return undefined;
+      }
+
+      const dockResult = dockController.handleInput(data);
+      if (dockResult?.consume) return dockResult;
+
+      const nextData = dockResult?.data !== undefined ? dockResult.data : data;
+
+      if (dockController.blocksScreenInput()) {
+        return undefined;
+      }
+
+      const topLayer = uiLayerStack.top();
+      if (topLayer && topLayer !== UI_LAYER_KEYS.pager) {
+        return undefined;
+      }
+
+      return screenManager.handleInput(nextData);
+    });
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     await ensureConfigFile();
     await refreshStatus(ctx);
+    installScreenInputRouter(ctx);
+    await ensureThreadReferenceEditorInstalled(pi, ctx);
+    activateThreadScreen();
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     await refreshStatus(ctx);
+    installScreenInputRouter(ctx);
+    await ensureThreadReferenceEditorInstalled(pi, ctx);
     closeLongFormPager(ctx);
+  });
+
+  pi.on("agent_start", async (_event, ctx) => {
+    await ensureThreadReferenceEditorInstalled(pi, ctx);
+  });
+
+  pi.on("user_bash", async (event, ctx) => {
+    handleThreadReferenceUserBash(event, ctx);
+  });
+
+  pi.events.on("thread:handoff", (data?: { stay?: boolean }) => {
+    handleThreadReferenceHandoff(data);
   });
 
 
