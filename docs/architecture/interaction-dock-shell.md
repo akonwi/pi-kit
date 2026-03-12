@@ -1,12 +1,12 @@
 # Architecture Decision: Screen + Interaction Dock Shell
 
-- Status: Accepted
-- Date: 2026-03-11
+- Status: Implemented
+- Date: 2026-03-11 (implemented 2026-03-12)
 - Scope: Pi kit UI architecture for thread view, pager, wizard, and future interactive screens
 
 ## Summary
 
-We will structure the UI around a persistent application shell with three layers:
+The UI is structured around a persistent application shell with three layers:
 
 1. **Screen Area** — the main content area above the dock
 2. **Interaction Dock** — a persistent bottom-anchored interaction region
@@ -14,24 +14,24 @@ We will structure the UI around a persistent application shell with three layers
 
 The dock remains a stable layout region, but it does **not** always host the same input implementation. Instead, each active screen selects an **Input Surface** for the dock.
 
-This replaces the narrower mental model of "one composer everywhere" with a broader model:
+This replaced the narrower mental model of "one composer everywhere" with a broader model:
 
 - there is one persistent **dock region**
-- the dock can host different **input surfaces** depending on context
+- the dock hosts different **input surfaces** depending on context
 - transient UI is rendered as overlays, not as part of screen or dock layout flow
 
 ---
 
 ## Why this decision exists
 
-The previous direction exposed a few foundational problems:
+The previous architecture exposed foundational problems:
 
-- picker UI was too entangled with the editor/composer render path
-- pager behavior, picker behavior, and composer behavior were competing for focus and escape handling
-- transient UI could affect layout and cursor behavior in ways that felt unstable
-- the system did not generalize cleanly to future contexts like wizard-style screens
+- picker UI was entangled with the editor/composer render path
+- pager, picker, and composer competed for focus and escape handling
+- transient UI affected layout and cursor behavior in ways that felt unstable
+- the system did not generalize to contexts like wizard-style screens
 
-The desired UX is more general:
+The goals that drove this decision:
 
 - the bottom interaction area should feel stable and foundational
 - the content above it should be free to change by mode/screen
@@ -82,7 +82,7 @@ Examples:
 ## Decision
 
 ### 1. The app uses a routed shell
-The UI should be thought of as a shell with:
+The UI is a shell with:
 
 - **Screen Area** on top
 - **Interaction Dock** fixed at the bottom
@@ -111,12 +111,12 @@ Transient UI must live in the overlay layer.
 This is a hard architectural rule for anything that should not affect layout stability.
 
 ### 5. The picker is a true overlay
-The picker must:
-- render with the highest priority among transient UI relevant to the dock interaction
-- be visually attached to the top edge of the dock/input surface when appropriate
-- **not** be a sibling in the dock's internal layout flow
-- **not** resize the dock
-- **not** resize the screen
+The picker:
+- renders with the highest priority among transient UI relevant to the dock interaction
+- is visually attached to the top edge of the dock/input surface
+- is **not** a sibling in the dock's internal layout flow
+- does **not** resize the dock
+- does **not** resize the screen
 
 Visually attached, architecturally floating.
 
@@ -128,16 +128,16 @@ Visually attached, architecturally floating.
 The shell remains stable while screen content and dock behavior vary by context.
 
 ### One dock region, many input surfaces
-We standardize the existence of the dock, not a single implementation of its contents.
+The dock is a standardized region, not a single implementation of its contents.
 
 ### Transient UI never drives layout
-Pickers, menus, and dialogs should be overlays, not embedded layout participants.
+Pickers, menus, and dialogs are overlays, not embedded layout participants.
 
-### Screen changes should not imply new architectural rules
-A pager, wizard, or future screen should fit into the same shell model rather than inventing a custom one-off stack.
+### Screen changes do not imply new architectural rules
+Pager, wizard, and future screens fit into the same shell model rather than inventing custom one-off stacks.
 
-### Focus and dismissal must be explicit
-The system must have clear ownership of:
+### Focus and dismissal are explicit
+The system has clear ownership of:
 - focus
 - cursor
 - key precedence
@@ -147,7 +147,7 @@ The system must have clear ownership of:
 
 ## Invariants
 
-These should remain true across implementation and future iteration.
+These hold true across the implementation and future iteration.
 
 ### Shell invariants
 1. There is one persistent **Screen Area**.
@@ -201,13 +201,14 @@ Used for:
 - pager notes
 - other freeform text interactions
 
-Capabilities may include:
+Capabilities:
 - text editing
 - cursor rendering/ownership
 - draft binding
 - submit behavior
 - suggestion trigger detection
 - overlay anchoring for picker
+- render delegation (for wizard to take over dock rendering)
 
 ### Wizard Input Surface
 Used for:
@@ -216,7 +217,7 @@ Used for:
 - occasional free text
 - guided workflows where the dock remains present but the interaction style differs from freeform composition
 
-Capabilities may include:
+Capabilities:
 - option focus
 - constrained navigation
 - auxiliary free-text field
@@ -227,20 +228,17 @@ Used when the active screen should control the entire experience without dock in
 
 ---
 
-## Recommended contracts
+## Contracts
 
-The exact code interfaces can evolve, but conceptually the system should have the following contracts.
-
-### Screen contract
-A screen should be able to declare:
+### Screen contract (`ScreenController`)
+A screen declares:
 - what it renders in the screen area
-- what input surface should appear in the dock
-- what behavior/configuration should be passed to that input surface
-- what keys it intercepts before falling back
-- what should happen on submit/cancel/escape when no overlay is open
+- what input surface the dock hosts
+- what keys it intercepts
+- what happens on submit/cancel/escape when no overlay is open
 
 ### Input surface contract
-An input surface should be able to declare:
+An input surface declares:
 - how it renders inside the dock
 - how it handles input
 - whether it owns a cursor/focus target
@@ -248,49 +246,28 @@ An input surface should be able to declare:
 - whether it supports anchored overlays such as the picker
 - what submit means in its current context
 
-### Overlay manager contract
-The overlay system should be able to:
-- open/close overlays
-- determine the topmost active overlay
-- route dismiss behavior by priority
-- allow visual anchoring relative to the dock/input surface
-- prevent overlays from affecting layout geometry
+### Overlay contract
+The overlay system:
+- opens/closes overlays via `tui.showOverlay()`
+- prevents overlays from affecting layout geometry
+- allows visual anchoring relative to the dock/input surface
 
 ---
 
 ## Key Routing and Dismissal
 
-Key handling should be governed by explicit priority, not ad hoc listener competition.
+Key handling follows explicit priority:
 
-Recommended order:
-
-1. **Overlay Layer**
-   - picker
-   - dialogs
-   - any transient focused overlay
-2. **Active Input Surface**
-   - text composer
-   - wizard controls
-   - choice input
-3. **Active Screen**
-   - pager navigation
-   - screen-level shortcuts
-4. **App/global fallback**
-
-Notes:
-- Some screens may intentionally shift some responsibilities between screen and input surface.
-- That variance should be explicit and contractual, not incidental.
+1. **Dock handler** — captures picker-specific keys when picker is open
+2. **`blocksScreenInput()`** — prevents screen input while picker is active
+3. **Active Screen** — handles screen-level shortcuts (pager nav, wizard controls, escape)
+4. **Editor/Input Surface** — handles remaining keys (text editing, typing)
 
 ### Escape rule
-`Esc` should always dismiss the topmost dismissible layer first.
-
-Examples:
+`Esc` dismisses the topmost dismissible layer first:
 - picker open → close picker
-- other overlay open → close that overlay
-- pager screen active with no overlay → pager screen handles close/back
+- pager/wizard active with no overlay → screen handles close/cancel
 - otherwise → fallback/default behavior
-
-No workaround-based double-escape behavior should be the long-term design.
 
 ---
 
@@ -309,7 +286,7 @@ No workaround-based double-escape behavior should be the long-term design.
 ### Pager screen
 **Screen Area:** paged long-form content and section status
 
-**Dock Input Surface:** likely `TextComposerSurface` with a different binding/context
+**Dock Input Surface:** `TextComposerSurface` with `mode: "pager"`
 
 **Behavior:**
 - active section determines which draft is bound
@@ -319,14 +296,14 @@ No workaround-based double-escape behavior should be the long-term design.
 - picker remains an overlay attached to the dock, not part of pager layout
 
 ### Wizard screen
-**Screen Area:** question context, progress, helper text, richer interaction UI
+**Screen Area:** question context, progress, helper text (screen overlay)
 
-**Dock Input Surface:** likely `WizardInputSurface` or `HiddenInputSurface`
+**Dock Input Surface:** `WizardInputSurface` via render delegate on `TextComposerSurface`
 
 **Behavior:**
-- may use constrained controls instead of a freeform text composer
-- may optionally include free-text entry when needed
-- should not be forced into the same interaction metaphor as the normal text composer
+- uses constrained controls (select lists, boolean, text input) instead of freeform composer
+- wizard screen captures all input; text composer is passive
+- returns structured answers via Promise
 
 ---
 
@@ -345,56 +322,25 @@ Not every dock interaction implementation is meaningfully a composer. The broade
 
 ---
 
-## Implementation guidance
+## Module layout
 
-This document is architectural, not code-level, but it implies the following direction.
+### UI infrastructure (`extensions/ui/`)
+- `shell.ts` — `ScreenManager`, `InteractionDockController`, core types
+- `picker-overlay.ts` — `AnchoredPickerOverlayController`
+- `thread-reference-shell.ts` — suggestion providers, editor installation, dock integration
 
-### Suggested top-level modules
-- `AppShell`
-- `ScreenManager` or screen routing/controller
-- `InteractionDock`
-- `InputSurface` implementations
-- `OverlayManager`
+### Input surfaces (`extensions/ui/input-surfaces/`)
+- `text-composer.ts` — `TextComposerSurface` (text editing, picker triggers, render delegation)
+- `wizard-input.ts` — `WizardInputSurface` (question state, select/text/boolean controls)
 
-### Suggested near-term input surfaces
-- `TextComposerSurface`
-- `WizardInputSurface`
-- `HiddenInputSurface`
+### Screens (`extensions/ui/screens/`)
+- `thread-screen.ts` — default screen, sets dock to text-composer mode
+- `pager-screen.ts` — paged content with per-section notes
+- `wizard-screen.ts` — guided questionnaire with dock render delegation
 
-### Suggested initial screens
-- `ThreadScreen`
-- `PagerScreen`
-- `WizardScreen`
-
-### Suggested responsibilities to separate early
-- dock rendering vs input-surface rendering
-- screen state vs dock state
-- overlay state vs layout state
-- dismiss/key precedence vs feature-specific logic
-
----
-
-## Migration guidance from current state
-
-The current code should be moved toward this architecture incrementally.
-
-### Phase 1: establish shell concepts
-- formalize screen vs dock vs overlay responsibilities
-- stop treating transient UI as dock/editor layout
-
-### Phase 2: extract picker into a true overlay
-- picker becomes overlay-managed
-- visual anchoring remains tied to the dock/input surface
-- layout independence becomes enforced
-
-### Phase 3: treat pager as a screen/context
-- pager owns screen content and screen-level behavior
-- pager no longer behaves like a partial layout hack above the composer
-- pager binds the dock to per-section drafts
-
-### Phase 4: generalize input surface abstraction
-- current composer becomes `TextComposerSurface`
-- wizard or guided flows can use alternate surfaces
+### Integration
+- `extensions/pi-kit.ts` — shell wiring, screen activation, tool/command registration
+- `extensions/thread-references.ts` — suggestion data, scoring, session/file indexing
 
 ---
 
@@ -413,6 +359,6 @@ When adding a new interaction, ask:
 
 ---
 
-## Final rule of thumb
+## Rule of thumb
 
-**The application should be built as a routed shell with a persistent screen area, a persistent bottom interaction dock, and a separate overlay layer. Screens choose the dock's input surface; overlays remain transient and layout-independent.**
+**The application is a routed shell with a persistent screen area, a persistent bottom interaction dock, and a separate overlay layer. Screens choose the dock's input surface; overlays remain transient and layout-independent.**
