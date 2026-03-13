@@ -69,7 +69,7 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
     const bodyLines = md.render(Math.max(12, inside - 4));
     const termRows = process.stdout.rows || 40;
     const availableRows = Math.max(8, termRows - 10);
-    const visibleBodyRows = Math.max(4, availableRows - 9);
+    const visibleBodyRows = Math.max(4, availableRows - 4);
     const maxScroll = Math.max(0, bodyLines.length - visibleBodyRows);
 
     return { section, bodyLines, availableRows, visibleBodyRows, maxScroll };
@@ -174,7 +174,7 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
             })
             .join(" ");
 
-          const { section, bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
+          const { bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
           scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
 
           const visibleBodyLines = bodyLines.slice(scrollOffset, scrollOffset + visibleBodyRows);
@@ -183,28 +183,26 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
             ? 0
             : Math.min(bodyLines.length, scrollOffset + visibleBodyLines.length);
           const scrollStatus = maxScroll > 0
-            ? `Lines ${firstVisibleLine}-${lastVisibleLine} / ${bodyLines.length}`
-            : `Lines ${bodyLines.length}`;
-          const currentNote = liveCurrentNote;
-          const noteStatus = currentNote
-            ? theme.fg("success", "Composing in the shared editor below")
-            : theme.fg("dim", "Type in the shared editor below to leave feedback for this section");
-          const escapeStatus = theme.fg("dim", "Esc closes pager");
+            ? `${firstVisibleLine}-${lastVisibleLine}/${bodyLines.length}`
+            : `${bodyLines.length} lines`;
+
+          // Single header: dots  position  notes  ···  scroll
+          const posNotes = `${index + 1}/${sections.length}  ${noteCount} note${noteCount === 1 ? "" : "s"}`;
+          const leftPart = `${dots}  ${theme.fg("dim", posNotes)}`;
+          const leftPlain = stripAnsi(leftPart);
+          const rightPart = theme.fg("dim", scrollStatus);
+          const rightPlain = scrollStatus;
+          const headerGap = Math.max(2, inside - leftPlain.length - rightPlain.length);
+          const headerRow = `${leftPart}${" ".repeat(headerGap)}${rightPart}`;
+
+          const hintRow = theme.fg("dim", "Enter send • Esc close • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll");
 
           const content = [
             `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
-            row(theme.fg("accent", theme.bold(`Long response • ${index + 1}/${sections.length} • ${noteCount} note${noteCount === 1 ? "" : "s"}`))),
-            row(theme.fg("text", theme.bold(section.title))),
-            row(`${dots}`),
-            row(theme.fg("dim", scrollStatus)),
-            row(noteStatus),
-            row(escapeStatus),
-            row(),
+            row(headerRow),
             ...visibleBodyLines.map((line) => row(` ${line}`)),
             ...Array.from({ length: Math.max(0, visibleBodyRows - visibleBodyLines.length) }, () => row()),
-            row(),
-            row(theme.fg("dim", "Shared composer below • clear editor to clear note • Enter sends all notes")),
-            row(theme.fg("dim", "Esc closes pager • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll")),
+            row(hintRow),
             `${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`,
           ];
 
