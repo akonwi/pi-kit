@@ -138,6 +138,7 @@ async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> 
       },
       {
         pickerMaxItems: PICKER_MAX_ITEMS,
+        dockFooterRows: 0,
         getTransientBadge,
         onThreadInserted: () => showTransientBadge("THREAD INSERTED"),
         onPickerVisibilityChange: (open: boolean) => {
