@@ -36,7 +36,7 @@ Then in Pi:
 
 ## File picker ignores
 
-To prune large repos for the `@` file picker, add a repo-local `.pi-files-ignore` file at the project root (the session cwd).
+To prune large repos for the `@` file picker, add a repo-local `.pi-ignore` file at the project root (the session cwd).
 
 Example:
 
@@ -65,6 +65,6 @@ You can also manage entries from inside Pi:
 /files:unignore packages/api/dist
 ```
 
-- `/files:ignore` adds to the nearest existing `.pi-files-ignore` up the tree from the target path; if none exists yet, it creates one at the session root
+- `/files:ignore` adds to the nearest existing `.pi-ignore` up the tree from the target path; if none exists yet, it creates one at the session root
 - `/files:unignore` removes the matching entry from the nearest applicable ignore file
 - running either command with no path opens an interactive picker

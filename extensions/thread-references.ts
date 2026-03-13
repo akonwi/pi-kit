@@ -21,7 +21,7 @@ const BADGE_DURATION_MS = 3000;
 export const PICKER_MAX_ITEMS = 8;
 const PICKER_MAX_FILES = 4000;
 const DEFAULT_FILE_SCAN_EXCLUDES = [".git", "node_modules", ".pi", ".agents", "dist", "build"];
-const FILE_PICKER_IGNORE_FILE = ".pi-files-ignore";
+const FILE_PICKER_IGNORE_FILE = ".pi-ignore";
 export const FALLBACK_BUILT_IN_COMMANDS = [
   "login",
   "logout",
