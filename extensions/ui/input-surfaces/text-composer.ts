@@ -136,7 +136,7 @@ export class TextComposerSurface extends CustomEditor {
       options.onPickerVisibilityChange,
     );
     this.pickerMaxItems = options.pickerMaxItems ?? 8;
-    this.dockFooterRows = options.dockFooterRows ?? 2;
+    this.dockFooterRows = options.dockFooterRows ?? 0;
     this.panelMargin = options.panelMargin ?? (() => 0);
     this.getTransientBadge = options.getTransientBadge ?? (() => undefined);
     this.onThreadInserted = options.onThreadInserted ?? (() => {});
