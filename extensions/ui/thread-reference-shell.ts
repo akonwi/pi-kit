@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { TextComposerSurface, type TextComposerPickerItem } from "./input-surfaces/text-composer";
@@ -10,6 +11,7 @@ import {
   listSessions,
   messageText,
   scanFiles,
+  scanLegacyIgnoreFiles,
   requestThreadReferenceRender,
   scoreMatch,
   setThreadReferenceRenderRequest,
@@ -30,6 +32,7 @@ let activeDockState: DockState = {
   mode: "thread",
   supportsPicker: true,
 };
+let lastLegacyIgnoreWarningKey: string | undefined;
 
 function normalizeBashCommand(raw: string): string {
   const text = (raw || "").trim();
@@ -110,12 +113,37 @@ function getBashSuggestions(query: string): string[] {
     .map((x) => x.cmd);
 }
 
+async function warnAboutLegacyIgnoreFiles(ctx: any): Promise<void> {
+  const legacyFiles = await scanLegacyIgnoreFiles(ctx.cwd);
+  if (legacyFiles.length === 0) {
+    lastLegacyIgnoreWarningKey = undefined;
+    return;
+  }
+
+  const warningKey = legacyFiles.join("\n");
+  if (warningKey === lastLegacyIgnoreWarningKey) {
+    return;
+  }
+  lastLegacyIgnoreWarningKey = warningKey;
+
+  const listed = legacyFiles
+    .slice(0, 3)
+    .map((file) => path.relative(ctx.cwd, file) || ".pi-files-ignore")
+    .join(", ");
+  const extra = legacyFiles.length > 3 ? ` (+${legacyFiles.length - 3} more)` : "";
+  ctx.ui.notify(
+    `Deprecated .pi-files-ignore detected (${listed}${extra}). It is ignored; rename it to .pi-ignore.`,
+    "warning",
+  );
+}
+
 async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> {
   builtInCommands = await discoverBuiltInCommands();
   fileIndex = await scanFiles(ctx.cwd);
   threadIndex = await listSessions(ctx.sessionManager.getSessionFile());
   refreshBashHistory(ctx);
   pickerOpen = false;
+  await warnAboutLegacyIgnoreFiles(ctx);
 
   sharedInteractionDock.setInputHandler((data: string) => {
     const shouldCapture = Boolean(pickerOpen && activeEditor?.shouldCapturePickerKey(data));

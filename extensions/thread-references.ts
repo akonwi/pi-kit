@@ -22,6 +22,7 @@ export const PICKER_MAX_ITEMS = 8;
 const PICKER_MAX_FILES = 4000;
 const DEFAULT_FILE_SCAN_EXCLUDES = [".git", "node_modules", ".pi", ".agents", "dist", "build"];
 const FILE_PICKER_IGNORE_FILE = ".pi-ignore";
+const LEGACY_FILE_PICKER_IGNORE_FILE = ".pi-files-ignore";
 export const FALLBACK_BUILT_IN_COMMANDS = [
   "login",
   "logout",
@@ -344,7 +345,7 @@ async function removeIgnoreEntryByPath(baseDir: string, targetPath: string): Pro
   return { removed: false };
 }
 
-async function scanIgnoreFiles(cwd: string): Promise<string[]> {
+async function scanNamedFiles(cwd: string, fileName: string): Promise<string[]> {
   const found: string[] = [];
 
   async function walk(dir: string): Promise<void> {
@@ -362,7 +363,7 @@ async function scanIgnoreFiles(cwd: string): Promise<string[]> {
         await walk(full);
         continue;
       }
-      if (entry.isFile() && entry.name === FILE_PICKER_IGNORE_FILE) {
+      if (entry.isFile() && entry.name === fileName) {
         found.push(full);
       }
     }
@@ -370,6 +371,14 @@ async function scanIgnoreFiles(cwd: string): Promise<string[]> {
 
   await walk(cwd);
   return found.sort((a, b) => a.localeCompare(b));
+}
+
+async function scanIgnoreFiles(cwd: string): Promise<string[]> {
+  return scanNamedFiles(cwd, FILE_PICKER_IGNORE_FILE);
+}
+
+export async function scanLegacyIgnoreFiles(cwd: string): Promise<string[]> {
+  return scanNamedFiles(cwd, LEGACY_FILE_PICKER_IGNORE_FILE);
 }
 
 async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; value: string }>> {
@@ -400,7 +409,7 @@ async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; 
       }
 
       if (!entry.isFile()) continue;
-      if (relative === FILE_PICKER_IGNORE_FILE) continue;
+      if (relative === FILE_PICKER_IGNORE_FILE || relative === LEGACY_FILE_PICKER_IGNORE_FILE) continue;
       if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
       files.push(relative);
     }
@@ -445,6 +454,7 @@ export async function scanFiles(cwd: string): Promise<string[]> {
       }
 
       if (!entry.isFile()) continue;
+      if (relative === FILE_PICKER_IGNORE_FILE || relative === LEGACY_FILE_PICKER_IGNORE_FILE) continue;
       if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
       paths.push(relative);
     }

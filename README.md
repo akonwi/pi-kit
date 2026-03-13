@@ -56,6 +56,7 @@ Rules:
 - `*.log` matches file or directory names by segment
 - `packages/*/dist/` matches relative paths from the repo root
 - built-in excludes still apply: `.git/`, `node_modules/`, `.pi/`, `.agents/`, `dist/`, `build/`
+- legacy `.pi-files-ignore` files are deprecated and ignored until renamed to `.pi-ignore`
 
 You can also manage entries from inside Pi:
 
