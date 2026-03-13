@@ -123,10 +123,14 @@ export function openWizardScreen(options: WizardScreenOptions): {
           const fit = (s: string) => fitLine(s, inside);
           const row = (content = "") => `${bc("│")}${fit(content)}${bc("│")}`;
 
+          const metrics = dock.getMetrics();
+          const termRows = process.stdout.rows || 40;
+          const availableRows = Math.max(8, termRows - metrics.panelLines - 2);
+          
           const q = surface.getQuestion();
           const prevAnswer = surface.getPreviousAnswerLabel();
 
-          const lines = [
+          const content = [
             `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
             row(theme.fg("accent", theme.bold(title))),
             row(
@@ -136,12 +140,20 @@ export function openWizardScreen(options: WizardScreenOptions): {
             row(theme.fg("text", theme.bold(q.label))),
           ];
 
-          if (q.help) lines.push(row(theme.fg("muted", q.help)));
-          if (prevAnswer) lines.push(row(theme.fg("dim", `Current: ${clip(prevAnswer, 80)}`)));
-          lines.push(row());
-          lines.push(`${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`);
+          if (q.help) content.push(row(theme.fg("muted", q.help)));
+          if (prevAnswer) content.push(row(theme.fg("dim", `Current: ${clip(prevAnswer, 80)}`)));
+          
+          // Fill remaining space with empty rows
+          const usedRows = content.length + 2; // +2 for empty row and bottom border
+          const emptyRows = Math.max(0, availableRows - usedRows);
+          for (let i = 0; i < emptyRows; i++) {
+            content.push(row());
+          }
+          
+          content.push(row());
+          content.push(`${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`);
 
-          return lines;
+          return content.slice(0, availableRows);
         },
 
         invalidate(): void {},
