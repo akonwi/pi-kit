@@ -100,7 +100,6 @@ function getThreadSuggestions(query: string): TextComposerPickerItem[] {
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || b.s.modified.getTime() - a.s.modified.getTime())
-    .slice(0, PICKER_MAX_ITEMS)
     .map((x) => ({ label: `${x.title}  ·  ${x.id8}`, value: x.id8 }));
 }
 

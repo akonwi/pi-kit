@@ -195,6 +195,7 @@ export class TextComposerSurface extends CustomEditor {
     return {
       items: this.picker.items,
       selected: this.picker.selected,
+      visibleItems: this.pickerMaxItems,
     };
   }
 
@@ -208,7 +209,7 @@ export class TextComposerSurface extends CustomEditor {
     const layout = this.lastPanelLayout;
     if (!layout) return;
 
-    const overlayHeight = state.items.length + 2;
+    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 2;
     const termRows = process.stdout.rows || 40;
     const row = Math.max(0, termRows - this.dockFooterRows - layout.panelLines - overlayHeight);
 
@@ -248,7 +249,6 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = slashMatch[1] || "/";
       const query = prefix.slice(1);
       const items = this.providers.getSlashSuggestions(query)
-        .slice(0, this.pickerMaxItems)
         .map((value) => ({ label: value, value }));
       this.setPicker(items.length > 0 ? { kind: "slash", prefix, items, selected: 0 } : undefined);
       return;
@@ -258,7 +258,7 @@ export class TextComposerSurface extends CustomEditor {
     if (threadMatch) {
       const prefix = threadMatch[1] || "@@";
       const query = prefix.slice(2);
-      const items = this.providers.getThreadSuggestions(query).slice(0, this.pickerMaxItems);
+      const items = this.providers.getThreadSuggestions(query);
       this.setPicker(items.length > 0 ? { kind: "thread", prefix, items, selected: 0 } : undefined);
       return;
     }
@@ -268,7 +268,6 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = fileMatch[1] || "@";
       const query = prefix.slice(1);
       const items = this.providers.getFileSuggestions(query)
-        .slice(0, this.pickerMaxItems)
         .map((value) => ({ label: value, value }));
       this.setPicker(items.length > 0 ? { kind: "file", prefix, items, selected: 0 } : undefined);
       return;
@@ -279,7 +278,6 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = bashMatch[1] || "!";
       const query = prefix.slice(1);
       const items = this.providers.getBashSuggestions(query)
-        .slice(0, this.pickerMaxItems)
         .map((value) => ({ label: `!${value}`, value }));
       this.setPicker(items.length > 0 ? { kind: "bash", prefix, items, selected: 0 } : undefined);
       return;

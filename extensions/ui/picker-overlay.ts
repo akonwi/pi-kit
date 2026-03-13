@@ -8,6 +8,7 @@ type PickerOverlayItem = {
 export type PickerOverlayState = {
   items: PickerOverlayItem[];
   selected: number;
+  visibleItems: number;
 };
 
 export type PickerOverlayCallbacks = {
@@ -90,9 +91,14 @@ class PickerOverlayComponent {
     const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
     const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("accent", text) : text;
 
+    const visibleItems = Math.max(1, Math.min(state.visibleItems, state.items.length));
+    const preferredStart = state.selected - Math.floor(visibleItems / 2);
+    const start = Math.max(0, Math.min(preferredStart, state.items.length - visibleItems));
+    const end = Math.min(state.items.length, start + visibleItems);
+
     const lines = [border(`╭${"─".repeat(inside)}╮`)];
 
-    for (let index = 0; index < state.items.length; index++) {
+    for (let index = start; index < end; index++) {
       const item = state.items[index]!;
       const selected = index === state.selected;
       const marker = selected ? selectedFg("› ") : "  ";
