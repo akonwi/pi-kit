@@ -1015,30 +1015,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       !ctx.hasPendingMessages(),
     );
 
-    if (config.bells.enabled) {
-      if (isTerminalError) {
-        await playErrorAlert(pi, config);
-      } else {
-        writeBell();
-      }
-    }
-
-    if (!config.speech.enabled) return;
-    if (process.platform !== "darwin") return;
-    if (!lastAssistant) return;
-
-    const raw = messageText(lastAssistant as AgentMessage);
-    const speech = shortenForSpeech(raw, config.speech.maxChars);
-    if (!speech) return;
-
-    const sessionId = ctx.sessionManager.getSessionId();
-    const signature = `${(lastAssistant as { timestamp?: number }).timestamp || 0}:${speech}`;
-    if (lastSpokenBySession.get(sessionId) === signature) return;
-
-    lastSpokenBySession.set(sessionId, signature);
-    const args: string[] = [];
-    if (config.speech.voice) args.push("-v", config.speech.voice);
-    args.push(speech);
-    await runCommand(pi, "say", args);
+    // Bells and speech are now handled by pi-kit v2 natively.
+    // See v2/src/features/notifications.ts
   });
 }
