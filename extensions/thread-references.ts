@@ -665,10 +665,10 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
   };
 
   const refreshIndexes = async (
-    ctx: any,
+    _ctx: any,
     options?: { files?: boolean; threads?: boolean },
   ): Promise<void> => {
-    await requestThreadReferenceIndexRefresh(ctx, options);
+    pi.events.emit("thread-reference:index-refresh", options || { files: true, threads: true });
     requestEditorRender?.();
   };
 

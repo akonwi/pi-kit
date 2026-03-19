@@ -6,7 +6,7 @@ import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { isKeyRelease, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
-import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
+import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, refreshThreadReferenceIndexes, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
 import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
 import { createThreadScreen } from "./ui/screens/thread-screen";
 import { openWizardScreen } from "./ui/screens/wizard-screen";
@@ -795,7 +795,9 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     handleThreadReferenceHandoff(data);
   });
 
-
+  pi.events.on("thread-reference:index-refresh", (data?: { files?: boolean; threads?: boolean }) => {
+    void refreshThreadReferenceIndexes(data);
+  });
 
   pi.registerCommand("bells", {
     description: "Toggle bells: /bells on|off|toggle",

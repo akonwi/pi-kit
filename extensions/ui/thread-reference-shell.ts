@@ -14,13 +14,13 @@ import {
   messageText,
   scanLegacyIgnoreFiles,
   requestThreadReferenceRender,
-  setThreadReferenceIndexRefresh,
   setThreadReferenceRenderRequest,
   showTransientBadge,
 } from "../thread-references";
 
 let fileIndex: FileIndex | undefined;
 let threadIndex: ThreadIndex | undefined;
+let currentCtx: any;
 let bashHistory: string[] = [];
 let builtInCommands: string[] = [...FALLBACK_BUILT_IN_COMMANDS];
 let installedEditorSessionId: string | undefined;
@@ -173,14 +173,20 @@ async function refreshIndexes(
   requestThreadReferenceRender();
 }
 
+export async function refreshThreadReferenceIndexes(
+  options?: { files?: boolean; threads?: boolean },
+): Promise<void> {
+  if (!currentCtx) return;
+  await refreshIndexes(currentCtx, options);
+}
+
 async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> {
+  currentCtx = ctx;
   builtInCommands = await discoverBuiltInCommands();
   await refreshIndexes(ctx, { files: true, threads: true });
   refreshBashHistory(ctx);
   pickerOpen = false;
   await warnAboutLegacyIgnoreFiles(ctx);
-
-  setThreadReferenceIndexRefresh((refreshCtx, options) => refreshIndexes(refreshCtx, options));
 
   sharedInteractionDock.setInputHandler((data: string) => {
     const shouldCapture = Boolean(pickerOpen && activeEditor?.shouldCapturePickerKey(data));
