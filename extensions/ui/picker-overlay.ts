@@ -93,6 +93,7 @@ class PickerOverlayComponent {
 
     const inside = Math.max(8, width - 2);
     const border = (text: string) => this.theme?.fg ? this.theme.fg("borderMuted", text) : text;
+    const dim = (text: string) => this.theme?.fg ? this.theme.fg("dim", text) : text;
     const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
     const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("pickerFocusedText", text) : text;
 
@@ -102,7 +103,7 @@ class PickerOverlayComponent {
     const end = Math.min(state.items.length, start + visibleItems);
     const visible = state.items.slice(start, end);
     const maxLabelLen = visible.reduce((max, item) => Math.max(max, plainLen(item.label)), 0);
-    const labelWidth = Math.max(0, Math.min(maxLabelLen + 2, Math.floor(inside * 0.6)));
+    const labelWidth = Math.max(0, Math.min(maxLabelLen + 3, Math.floor(inside * 0.58)));
 
     const lines = [border(`┌${"─".repeat(inside)}┐`)];
 
@@ -110,10 +111,13 @@ class PickerOverlayComponent {
       const item = state.items[index]!;
       const selected = index === state.selected;
       const rawLabel = item.label;
-      const description = item.description ? ` ${item.description}` : "";
+      const description = item.description ? `  ${item.description}` : "";
+      const renderedDescription = description
+        ? (selected ? description : dim(description))
+        : "";
 
-      const text = description && labelWidth > 0
-        ? fitToWidth(`${fitToWidth(rawLabel, labelWidth)}${description}`, inside)
+      const text = renderedDescription && labelWidth > 0
+        ? fitToWidth(`${fitToWidth(rawLabel, labelWidth)}${renderedDescription}`, inside)
         : fitToWidth(rawLabel, inside);
 
       const painted = selected ? selectedBg(selectedFg(text)) : text;
