@@ -192,6 +192,10 @@ export class TextComposerSurface extends CustomEditor {
     return this.dockState.surface === "text-composer" && this.dockState.supportsPicker;
   }
 
+  private canUseSlashPicker(): boolean {
+    return this.canUsePicker() && this.dockState.mode !== "pager";
+  }
+
   private border(text: string): string {
     return this.shellTheme?.fg ? this.shellTheme.fg("borderMuted", text) : text;
   }
@@ -288,7 +292,7 @@ export class TextComposerSurface extends CustomEditor {
     const beforeCursor = this.getText().slice(0, this.cursorOffset());
 
     const slashMatch = beforeCursor.match(/(?:^|\s)(\/[\w:-]*)$/);
-    if (slashMatch) {
+    if (slashMatch && this.canUseSlashPicker()) {
       const prefix = slashMatch[1] || "/";
       const query = prefix.slice(1);
       const items = this.providers.getSlashSuggestions(query);

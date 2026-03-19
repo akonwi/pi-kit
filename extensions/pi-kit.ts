@@ -325,8 +325,12 @@ async function maybeAutoNameSession(pi: ExtensionAPI, ctx: any): Promise<void> {
   }
 }
 
-function parseToggleArg(args: string | undefined): "on" | "off" | "toggle" | undefined {
+function parseToggleArg(
+  args: string | undefined,
+  options?: { emptyDefaultsToToggle?: boolean },
+): "on" | "off" | "toggle" | undefined {
   const raw = (args || "").trim().toLowerCase();
+  if (!raw) return options?.emptyDefaultsToToggle ? "toggle" : undefined;
   if (raw === "on" || raw === "off" || raw === "toggle") return raw;
   return undefined;
 }
@@ -800,11 +804,11 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("bells", {
-    description: "Toggle bells: /bells on|off|toggle",
+    description: "Toggle bell notifications on/off",
     handler: async (args, ctx) => {
-      const action = parseToggleArg(args);
+      const action = parseToggleArg(args, { emptyDefaultsToToggle: true });
       if (!action) {
-        ctx.ui.notify("Usage: /bells on|off|toggle", "warning");
+        ctx.ui.notify("Usage: /bells [on|off|toggle]", "warning");
         return;
       }
 
@@ -820,11 +824,11 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("speech", {
-    description: "Toggle speech: /speech on|off|toggle",
+    description: "Toggle speech notifications on/off",
     handler: async (args, ctx) => {
-      const action = parseToggleArg(args);
+      const action = parseToggleArg(args, { emptyDefaultsToToggle: true });
       if (!action) {
-        ctx.ui.notify("Usage: /speech on|off|toggle", "warning");
+        ctx.ui.notify("Usage: /speech [on|off|toggle]", "warning");
         return;
       }
 
@@ -936,11 +940,23 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("pager", {
-    description: "Open long-form pager for last assistant response: /pager [off]",
+    description: "Open pager for last assistant response, or close if open",
     handler: async (args, ctx) => {
       const action = String(args || "").trim().toLowerCase();
+      const activeScreen = screenManager.getActive();
+      const pagerOpen = activeScreen?.id === "pager";
+
+      if (!action && pagerOpen) {
+        closeLongFormPager(ctx);
+        ctx.ui.notify("Pager closed.", "info");
+        return;
+      }
 
       if (action === "off" || action === "hide" || action === "close") {
+        if (!pagerOpen) {
+          ctx.ui.notify("Pager is not open.", "info");
+          return;
+        }
         closeLongFormPager(ctx);
         ctx.ui.notify("Pager closed.", "info");
         return;
