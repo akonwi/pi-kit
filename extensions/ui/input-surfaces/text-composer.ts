@@ -218,7 +218,7 @@ export class TextComposerSurface extends CustomEditor {
     const layout = this.lastPanelLayout;
     if (!layout) return;
 
-    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 3;
+    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 2;
     const termRows = process.stdout.rows || 40;
     const row = Math.max(0, termRows - this.dockFooterRows - layout.panelLines - overlayHeight);
 
@@ -324,7 +324,8 @@ export class TextComposerSurface extends CustomEditor {
     }
 
     if (picker.kind === "slash") {
-      this.replaceTypedPrefix(picker.prefix, item.value);
+      const suffix = options?.submitAfter ? "" : " ";
+      this.replaceTypedPrefix(picker.prefix, `${item.value}${suffix}`);
       this.setPicker(undefined);
       if (options?.submitAfter) {
         super.handleInput("\r");

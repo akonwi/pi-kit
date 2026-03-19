@@ -93,7 +93,6 @@ class PickerOverlayComponent {
 
     const inside = Math.max(8, width - 2);
     const border = (text: string) => this.theme?.fg ? this.theme.fg("borderMuted", text) : text;
-    const dim = (text: string) => this.theme?.fg ? this.theme.fg("dim", text) : text;
     const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
     const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("pickerFocusedText", text) : text;
 
@@ -110,8 +109,7 @@ class PickerOverlayComponent {
     for (let index = start; index < end; index++) {
       const item = state.items[index]!;
       const selected = index === state.selected;
-      const marker = selected ? selectedFg("› ") : "  ";
-      const rawLabel = `${marker}${item.label}`;
+      const rawLabel = item.label;
       const description = item.description ? ` ${item.description}` : "";
 
       const text = description && labelWidth > 0
@@ -122,8 +120,6 @@ class PickerOverlayComponent {
       lines.push(`${border("│")}${painted}${border("│")}`);
     }
 
-    const hint = dim(fitToWidth("↑/↓ move • Tab fill • Enter pick • Esc close", inside));
-    lines.push(`${border("│")}${hint}${border("│")}`);
     lines.push(border(`└${"─".repeat(inside)}┘`));
     return lines;
   }
