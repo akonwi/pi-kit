@@ -542,11 +542,6 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     handler: manageHandler,
   });
 
-  pi.registerCommand("threads-manage", {
-    description: "Alias for /threads:manage",
-    handler: manageHandler,
-  });
-
   const choosePathToIgnore = async (ctx: any): Promise<string | null | undefined> => {
     if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
     const items = await scanPathPickerItems(ctx.cwd);
