@@ -5,6 +5,7 @@
  * so this version exposes both async `suggest()` and cached `suggestSync()`.
  */
 
+import path from "node:path";
 import { scanFiles, type ScanResult } from "./scan-files";
 import { scoreMatch } from "./score";
 
@@ -20,15 +21,28 @@ export type FileSuggestion = {
 };
 
 function toSuggestions(entries: FileIndexEntry[], query: string): FileSuggestion[] {
-  const norm = query.replace(/^@/, "");
+  const norm = query.replace(/^@/, "").trim();
 
   return entries
-    .map((entry) => ({
-      entry,
-      score: scoreMatch(entry.path, norm),
-    }))
+    .map((entry) => {
+      const baseName = path.posix.basename(entry.path.replace(/\/$/, ""));
+      const pathScore = scoreMatch(entry.path, norm);
+      const baseScore = norm ? scoreMatch(baseName, norm) : 0;
+      const score = baseScore > 0
+        ? Math.max(pathScore, baseScore + 8)
+        : pathScore;
+
+      return {
+        entry,
+        baseName,
+        score,
+      };
+    })
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
+    .sort((a, b) => {
+      if (!norm) return a.entry.path.localeCompare(b.entry.path);
+      return b.score - a.score || a.baseName.localeCompare(b.baseName) || a.entry.path.localeCompare(b.entry.path);
+    })
     .map((x) => ({
       name: `@${x.entry.path}`,
       description: x.entry.isDir ? "directory" : "",

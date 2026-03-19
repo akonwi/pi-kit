@@ -47,6 +47,20 @@ function plainLen(text: string): number {
   return stripAnsi(text).length;
 }
 
+function computeScrollbar(total: number, visible: number, offset: number): boolean[] | null {
+  if (total <= visible) return null;
+  const thumbSize = Math.max(1, Math.round((visible / total) * visible));
+  const maxOffset = total - visible;
+  const thumbOffset = maxOffset > 0
+    ? Math.round((offset / maxOffset) * (visible - thumbSize))
+    : 0;
+  const track: boolean[] = [];
+  for (let i = 0; i < visible; i++) {
+    track.push(i >= thumbOffset && i < thumbOffset + thumbSize);
+  }
+  return track;
+}
+
 class PickerOverlayComponent {
   private state: PickerOverlayState | undefined;
 
@@ -91,21 +105,25 @@ class PickerOverlayComponent {
     const state = this.state;
     if (!state || state.items.length === 0) return [];
 
-    const inside = Math.max(8, width - 2);
+    const contentWidth = Math.max(8, width - 2);
     const border = (text: string) => this.theme?.fg ? this.theme.fg("borderMuted", text) : text;
     const dim = (text: string) => this.theme?.fg ? this.theme.fg("dim", text) : text;
     const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
     const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("pickerFocusedText", text) : text;
+    const scrollThumb = (text: string) => this.theme?.fg ? this.theme.fg("pickerScrollThumb", text) : text;
+    const scrollTrack = (text: string) => this.theme?.fg ? this.theme.fg("pickerScrollTrack", text) : text;
 
     const visibleItems = Math.max(1, Math.min(state.visibleItems, state.items.length));
     const preferredStart = state.selected - Math.floor(visibleItems / 2);
     const start = Math.max(0, Math.min(preferredStart, state.items.length - visibleItems));
     const end = Math.min(state.items.length, start + visibleItems);
     const visible = state.items.slice(start, end);
+    const scrollbar = computeScrollbar(state.items.length, visible.length, start);
+    const textWidth = scrollbar ? Math.max(6, contentWidth - 1) : contentWidth;
     const maxLabelLen = visible.reduce((max, item) => Math.max(max, plainLen(item.label)), 0);
-    const labelWidth = Math.max(0, Math.min(maxLabelLen + 3, Math.floor(inside * 0.58)));
+    const labelWidth = Math.max(0, Math.min(maxLabelLen + 3, Math.floor(textWidth * 0.58)));
 
-    const lines = [border(`┌${"─".repeat(inside)}┐`)];
+    const lines = [border(`┌${"─".repeat(contentWidth)}┐`)];
 
     for (let index = start; index < end; index++) {
       const item = state.items[index]!;
@@ -115,16 +133,18 @@ class PickerOverlayComponent {
       const renderedDescription = description
         ? (selected ? description : dim(description))
         : "";
+      const lineText = renderedDescription && labelWidth > 0
+        ? fitToWidth(`${fitToWidth(rawLabel, labelWidth)}${renderedDescription}`, textWidth)
+        : fitToWidth(rawLabel, textWidth);
+      const paintedText = selected ? selectedBg(selectedFg(lineText)) : lineText;
+      const rail = scrollbar
+        ? (scrollbar[index - start] ? scrollThumb("█") : scrollTrack("│"))
+        : "";
 
-      const text = renderedDescription && labelWidth > 0
-        ? fitToWidth(`${fitToWidth(rawLabel, labelWidth)}${renderedDescription}`, inside)
-        : fitToWidth(rawLabel, inside);
-
-      const painted = selected ? selectedBg(selectedFg(text)) : text;
-      lines.push(`${border("│")}${painted}${border("│")}`);
+      lines.push(`${border("│")}${paintedText}${rail}${border("│")}`);
     }
 
-    lines.push(border(`└${"─".repeat(inside)}┘`));
+    lines.push(border(`└${"─".repeat(contentWidth)}┘`));
     return lines;
   }
 

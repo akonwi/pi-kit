@@ -37,6 +37,8 @@
 
     "selectedBg": "selectedBg",
     "pickerFocusedText": "black",
+    "pickerScrollThumb": "gray",
+    "pickerScrollTrack": "darkGray",
     "userMessageBg": "userMsgBg",
     "userMessageText": "offWhite",
     "customMessageBg": "customMsgBg",

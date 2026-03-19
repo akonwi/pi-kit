@@ -218,11 +218,21 @@ export class TextComposerSurface extends CustomEditor {
     const layout = this.lastPanelLayout;
     if (!layout) return;
 
-    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 2;
     const termRows = process.stdout.rows || 40;
+    const availableRows = termRows - this.dockFooterRows - layout.panelLines;
+    if (availableRows < 3) {
+      this.pickerOverlay.hide();
+      return;
+    }
+
+    const visibleItems = Math.max(1, Math.min(state.items.length, state.visibleItems, availableRows - 2));
+    const overlayHeight = visibleItems + 2;
     const row = Math.max(0, termRows - this.dockFooterRows - layout.panelLines - overlayHeight);
 
-    this.pickerOverlay.sync(state, {
+    this.pickerOverlay.sync({
+      ...state,
+      visibleItems,
+    }, {
       row,
       col: layout.margin,
       width: layout.panelWidth,
@@ -233,6 +243,29 @@ export class TextComposerSurface extends CustomEditor {
   private setPicker(next: PickerState | undefined): void {
     this.picker = next;
     this.syncPickerOverlay();
+  }
+
+  private buildPickerState(
+    kind: TextComposerPickerKind,
+    prefix: string,
+    items: TextComposerPickerItem[],
+  ): PickerState | undefined {
+    if (items.length === 0) return undefined;
+
+    const previous = this.picker;
+    const previousValue = previous && previous.kind === kind
+      ? previous.items[previous.selected]?.value
+      : undefined;
+    const selected = previousValue
+      ? Math.max(0, items.findIndex((item) => item.value === previousValue))
+      : 0;
+
+    return {
+      kind,
+      prefix,
+      items,
+      selected,
+    };
   }
 
   private cursorOffset(): number {
@@ -258,7 +291,7 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = slashMatch[1] || "/";
       const query = prefix.slice(1);
       const items = this.providers.getSlashSuggestions(query);
-      this.setPicker(items.length > 0 ? { kind: "slash", prefix, items, selected: 0 } : undefined);
+      this.setPicker(this.buildPickerState("slash", prefix, items));
       return;
     }
 
@@ -267,7 +300,7 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = threadMatch[1] || "@@";
       const query = prefix.slice(2);
       const items = this.providers.getThreadSuggestions(query);
-      this.setPicker(items.length > 0 ? { kind: "thread", prefix, items, selected: 0 } : undefined);
+      this.setPicker(this.buildPickerState("thread", prefix, items));
       return;
     }
 
@@ -276,7 +309,7 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = fileMatch[1] || "@";
       const query = prefix.slice(1);
       const items = this.providers.getFileSuggestions(query);
-      this.setPicker(items.length > 0 ? { kind: "file", prefix, items, selected: 0 } : undefined);
+      this.setPicker(this.buildPickerState("file", prefix, items));
       return;
     }
 
@@ -285,7 +318,7 @@ export class TextComposerSurface extends CustomEditor {
       const prefix = bashMatch[1] || "!";
       const query = prefix.slice(1);
       const items = this.providers.getBashSuggestions(query);
-      this.setPicker(items.length > 0 ? { kind: "bash", prefix, items, selected: 0 } : undefined);
+      this.setPicker(this.buildPickerState("bash", prefix, items));
       return;
     }
 

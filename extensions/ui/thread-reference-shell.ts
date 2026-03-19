@@ -154,16 +154,20 @@ function getThreadSuggestions(query: string): TextComposerPickerItem[] {
 }
 
 function getBashSuggestions(query: string): TextComposerPickerItem[] {
-  const q = query.trim().toLowerCase();
+  const normalizedQuery = query.trim().toLowerCase();
   return bashHistory
-    .map((cmd) => ({
+    .map((cmd, index) => ({
       label: `!${cmd}`,
       value: cmd,
       description: "recent bash",
-      score: scoreMatch(cmd.toLowerCase(), q),
+      score: normalizedQuery ? scoreMatch(cmd.toLowerCase(), normalizedQuery) : 1,
+      index,
     }))
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => {
+      if (!normalizedQuery) return a.index - b.index;
+      return b.score - a.score || a.index - b.index || a.value.localeCompare(b.value);
+    })
     .map(({ label, value, description }) => ({ label, value, description }));
 }
 
