@@ -18,6 +18,7 @@ export type FileSuggestion = {
   name: string;
   description: string;
   value: string;
+  isDir: boolean;
 };
 
 function toSuggestions(entries: FileIndexEntry[], query: string): FileSuggestion[] {
@@ -41,12 +42,16 @@ function toSuggestions(entries: FileIndexEntry[], query: string): FileSuggestion
     .filter((x) => x.score > 0)
     .sort((a, b) => {
       if (!norm) return a.entry.path.localeCompare(b.entry.path);
-      return b.score - a.score || a.baseName.localeCompare(b.baseName) || a.entry.path.localeCompare(b.entry.path);
+      return b.score - a.score
+        || Number(b.entry.isDir) - Number(a.entry.isDir)
+        || a.baseName.localeCompare(b.baseName)
+        || a.entry.path.localeCompare(b.entry.path);
     })
     .map((x) => ({
       name: `@${x.entry.path}`,
       description: x.entry.isDir ? "directory" : "",
       value: x.entry.path,
+      isDir: x.entry.isDir,
     }));
 }
 

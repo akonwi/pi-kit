@@ -142,6 +142,7 @@ function getFileSuggestions(query: string): TextComposerPickerItem[] {
     label: item.name,
     value: item.name,
     description: item.description,
+    appendSpace: !item.isDir,
   }));
 }
 

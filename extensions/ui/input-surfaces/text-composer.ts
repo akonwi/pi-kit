@@ -9,6 +9,7 @@ export type TextComposerPickerItem = {
   label: string;
   value: string;
   description?: string;
+  appendSpace?: boolean;
 };
 
 export type TextComposerSuggestionProviders = {
@@ -376,8 +377,12 @@ export class TextComposerSurface extends CustomEditor {
       return;
     }
 
-    this.replaceTypedPrefix(picker.prefix, `${item.value} `);
+    const suffix = item.appendSpace === false ? "" : " ";
+    this.replaceTypedPrefix(picker.prefix, `${item.value}${suffix}`);
     this.setPicker(undefined);
+    if (!suffix) {
+      this.updatePickerState();
+    }
   }
 
   override render(width: number): string[] {
