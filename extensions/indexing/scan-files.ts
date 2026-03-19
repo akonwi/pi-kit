@@ -47,6 +47,19 @@ async function loadIgnoreForDir(dir: string): Promise<Ignore> {
   return ig;
 }
 
+function relativeToBase(base: string, target: string): string {
+  const normBase = base.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/g, "");
+  const normTarget = target.replace(/\\/g, "/").replace(/^\.\//, "");
+
+  if (!normBase) return normTarget;
+  if (normTarget === normBase) return "";
+  if (normTarget.startsWith(`${normBase}/`)) {
+    return normTarget.slice(normBase.length + 1);
+  }
+
+  return normTarget;
+}
+
 export type ScanResult = {
   files: string[];
   dirs: string[];
@@ -56,13 +69,18 @@ export async function scanFiles(cwd: string): Promise<ScanResult> {
   const files: string[] = [];
   const dirs: string[] = [];
 
+  type IgnoreLayer = {
+    base: string;
+    ignore: Ignore;
+  };
+
   type StackEntry = {
     dir: string;
-    ignoreChain: Ignore[];
+    ignoreChain: IgnoreLayer[];
   };
 
   const rootIgnore = await loadIgnoreForDir(cwd);
-  const stack: StackEntry[] = [{ dir: cwd, ignoreChain: [rootIgnore] }];
+  const stack: StackEntry[] = [{ dir: cwd, ignoreChain: [{ base: "", ignore: rootIgnore }] }];
 
   while (stack.length > 0 && files.length + dirs.length < MAX_FILES) {
     const { dir, ignoreChain } = stack.pop()!;
@@ -74,7 +92,7 @@ export async function scanFiles(cwd: string): Promise<ScanResult> {
       continue;
     }
 
-    const subdirs: { dir: string; ignoreChain: Ignore[] }[] = [];
+    const subdirs: { dir: string; ignoreChain: IgnoreLayer[] }[] = [];
 
     for (const entry of rawEntries) {
       if (files.length + dirs.length >= MAX_FILES) break;
@@ -87,21 +105,21 @@ export async function scanFiles(cwd: string): Promise<ScanResult> {
         if (BUILT_IN_EXCLUDES.has(name)) continue;
 
         const relativeForIgnore = `${relative}/`;
-        if (ignoreChain.some((ig) => ig.ignores(relativeForIgnore))) continue;
+        if (ignoreChain.some((layer) => layer.ignore.ignores(relativeToBase(layer.base, relativeForIgnore)))) continue;
 
         dirs.push(relativeForIgnore);
 
         const subIgnore = await loadIgnoreForDir(full);
         subdirs.push({
           dir: full,
-          ignoreChain: [...ignoreChain, subIgnore],
+          ignoreChain: [...ignoreChain, { base: relative, ignore: subIgnore }],
         });
         continue;
       }
 
       if (!entry.isFile()) continue;
       if (name === ".gitignore" || name === PI_IGNORE_FILE || name === ".git") continue;
-      if (ignoreChain.some((ig) => ig.ignores(relative))) continue;
+      if (ignoreChain.some((layer) => layer.ignore.ignores(relativeToBase(layer.base, relative)))) continue;
 
       files.push(relative);
     }
