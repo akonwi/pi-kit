@@ -110,18 +110,30 @@ function getSlashSuggestions(pi: ExtensionAPI, query: string): TextComposerPicke
     }
   }
 
-  return Array.from(new Set([...builtInCommands, ...extensionCommandNames]))
-    .map((name) => {
+  const orderedNames = Array.from(new Set([...builtInCommands, ...extensionCommandNames]));
+  const normalizedQuery = query.trim();
+
+  return orderedNames
+    .map((name, index) => {
       const value = `/${name}`;
+      const description = commandDescriptions.get(name) || "";
+      const score = normalizedQuery
+        ? Math.max(scoreMatch(name, normalizedQuery), scoreMatch(description, normalizedQuery))
+        : 1;
+
       return {
         label: value,
         value,
-        description: commandDescriptions.get(name) || "",
-        score: scoreMatch(name, query),
+        description,
+        score,
+        index,
       };
     })
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
+    .sort((a, b) => {
+      if (!normalizedQuery) return a.index - b.index;
+      return b.score - a.score || a.index - b.index || a.value.localeCompare(b.value);
+    })
     .map(({ label, value, description }) => ({ label, value, description }));
 }
 
