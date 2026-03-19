@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { scanFiles as scanIndexedFiles } from "./indexing/scan-files";
+export { scoreMatch } from "./indexing/score";
 
 export type SessionInfoLite = {
   path: string;
@@ -78,40 +80,6 @@ export function getTransientBadge(): string | undefined {
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-
-function subsequenceScore(value: string, query: string): number {
-  if (!query) return 0;
-
-  let qi = 0;
-  let gaps = 0;
-  let firstMatch = -1;
-
-  for (let vi = 0; vi < value.length && qi < query.length; vi++) {
-    if (value[vi] === query[qi]) {
-      if (firstMatch === -1) firstMatch = vi;
-      qi++;
-    } else if (qi > 0) {
-      gaps++;
-    }
-  }
-
-  if (qi !== query.length) return 0;
-
-  // Base score for a subsequence match, minus penalties for gapiness/late start.
-  return Math.max(1, 35 - gaps - Math.max(0, firstMatch));
-}
-
-export function scoreMatch(value: string, query: string): number {
-  if (!query) return 1;
-  const v = value.toLowerCase();
-  const q = query.toLowerCase();
-  if (v === q) return 100;
-  if (v.startsWith(q)) return 85;
-  if (v.includes(q)) return 60;
-
-  // Fuzzy subsequence fallback (e.g. "thream" -> "threads-manage").
-  return subsequenceScore(v, q);
 }
 
 export async function discoverBuiltInCommands(): Promise<string[]> {
@@ -382,86 +350,21 @@ export async function scanLegacyIgnoreFiles(cwd: string): Promise<string[]> {
 }
 
 async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; value: string }>> {
-  const files: string[] = [];
-  const dirs = new Set<string>();
-  const ignoreRules = await loadIgnoreRules(cwd);
+  const result = await scanIndexedFiles(cwd);
 
-  async function walk(dir: string): Promise<void> {
-    if (files.length >= PICKER_MAX_FILES) return;
-
-    let entries: Awaited<ReturnType<typeof readdir>>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (files.length >= PICKER_MAX_FILES) return;
-      const full = path.join(dir, entry.name);
-      const relative = normalizeRelativePath(path.relative(cwd, full));
-
-      if (entry.isDirectory()) {
-        if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, true))) continue;
-        if (relative) dirs.add(`${relative}/`);
-        await walk(full);
-        continue;
-      }
-
-      if (!entry.isFile()) continue;
-      if (relative === FILE_PICKER_IGNORE_FILE || relative === LEGACY_FILE_PICKER_IGNORE_FILE) continue;
-      if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
-      files.push(relative);
-    }
-  }
-
-  await walk(cwd);
-
-  const dirItems = Array.from(dirs)
+  const dirItems = result.dirs
     .sort((a, b) => a.localeCompare(b))
     .map((value) => ({ label: `dir  ${value}`, value }));
-  const fileItems = files
+  const fileItems = result.files
     .sort((a, b) => a.localeCompare(b))
     .map((value) => ({ label: `file ${value}`, value }));
 
-  return [...dirItems, ...fileItems];
+  return [...dirItems, ...fileItems].slice(0, PICKER_MAX_FILES);
 }
 
 export async function scanFiles(cwd: string): Promise<string[]> {
-  const paths: string[] = [];
-  const ignoreRules = await loadIgnoreRules(cwd);
-
-  async function walk(dir: string): Promise<void> {
-    if (paths.length >= PICKER_MAX_FILES) return;
-
-    let entries: Awaited<ReturnType<typeof readdir>>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (paths.length >= PICKER_MAX_FILES) return;
-      const full = path.join(dir, entry.name);
-      const relative = normalizeRelativePath(path.relative(cwd, full));
-
-      if (entry.isDirectory()) {
-        if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, true))) continue;
-        if (relative) paths.push(`${relative}/`);
-        await walk(full);
-        continue;
-      }
-
-      if (!entry.isFile()) continue;
-      if (relative === FILE_PICKER_IGNORE_FILE || relative === LEGACY_FILE_PICKER_IGNORE_FILE) continue;
-      if (ignoreRules.some((rule) => matchesIgnoreRule(relative, rule, false))) continue;
-      paths.push(relative);
-    }
-  }
-
-  await walk(cwd);
-  return paths;
+  const result = await scanIndexedFiles(cwd);
+  return [...result.dirs, ...result.files].slice(0, PICKER_MAX_FILES);
 }
 
 export function messageText(msg: AgentMessage): string {

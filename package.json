@@ -22,6 +22,9 @@
     "prompts": ["./prompts"],
     "themes": ["./themes"]
   },
+  "dependencies": {
+    "ignore": "^7.0.5"
+  },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-coding-agent": "*",

@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { createFileIndex, type FileIndex } from "../indexing/file-index";
+import { scoreMatch } from "../indexing/score";
 import { TextComposerSurface, type TextComposerPickerItem } from "./input-surfaces/text-composer";
 import { sharedInteractionDock, type DockState } from "./shell";
 import {
@@ -10,17 +12,15 @@ import {
   getTransientBadge,
   listSessions,
   messageText,
-  scanFiles,
   scanLegacyIgnoreFiles,
   requestThreadReferenceRender,
-  scoreMatch,
   setThreadReferenceRenderRequest,
   showTransientBadge,
   threadTitle,
   type SessionInfoLite,
 } from "../thread-references";
 
-let fileIndex: string[] = [];
+let fileIndex: FileIndex | undefined;
 let threadIndex: SessionInfoLite[] = [];
 let bashHistory: string[] = [];
 let builtInCommands: string[] = [...FALLBACK_BUILT_IN_COMMANDS];
@@ -98,17 +98,11 @@ function getSlashSuggestions(pi: ExtensionAPI, query: string): TextComposerPicke
 }
 
 function getFileSuggestions(query: string): TextComposerPickerItem[] {
-  const norm = query.replace(/^@/, "").toLowerCase();
-  return fileIndex
-    .map((p) => ({
-      label: `@${p}`,
-      value: `@${p}`,
-      description: p.endsWith("/") ? "directory" : "",
-      score: scoreMatch(p.toLowerCase(), norm),
-    }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
-    .map(({ label, value, description }) => ({ label, value, description }));
+  return (fileIndex?.suggestSync(query) || []).map((item) => ({
+    label: item.name,
+    value: item.name,
+    description: item.description,
+  }));
 }
 
 function getThreadSuggestions(query: string): TextComposerPickerItem[] {
@@ -171,7 +165,8 @@ async function warnAboutLegacyIgnoreFiles(ctx: any): Promise<void> {
 
 async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> {
   builtInCommands = await discoverBuiltInCommands();
-  fileIndex = await scanFiles(ctx.cwd);
+  fileIndex = createFileIndex(ctx.cwd);
+  await fileIndex.ensureLoaded();
   threadIndex = await listSessions(ctx.sessionManager.getSessionFile());
   refreshBashHistory(ctx);
   pickerOpen = false;
