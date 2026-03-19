@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createFileIndex, type FileIndex } from "../indexing/file-index";
+import { createThreadIndex, type ThreadIndex } from "../indexing/thread-index";
 import { scoreMatch } from "../indexing/score";
 import { TextComposerSurface, type TextComposerPickerItem } from "./input-surfaces/text-composer";
 import { sharedInteractionDock, type DockState } from "./shell";
@@ -10,18 +11,16 @@ import {
   PICKER_MAX_ITEMS,
   discoverBuiltInCommands,
   getTransientBadge,
-  listSessions,
   messageText,
   scanLegacyIgnoreFiles,
   requestThreadReferenceRender,
+  setThreadReferenceIndexRefresh,
   setThreadReferenceRenderRequest,
   showTransientBadge,
-  threadTitle,
-  type SessionInfoLite,
 } from "../thread-references";
 
 let fileIndex: FileIndex | undefined;
-let threadIndex: SessionInfoLite[] = [];
+let threadIndex: ThreadIndex | undefined;
 let bashHistory: string[] = [];
 let builtInCommands: string[] = [...FALLBACK_BUILT_IN_COMMANDS];
 let installedEditorSessionId: string | undefined;
@@ -106,23 +105,11 @@ function getFileSuggestions(query: string): TextComposerPickerItem[] {
 }
 
 function getThreadSuggestions(query: string): TextComposerPickerItem[] {
-  const q = query.trim().toLowerCase();
-  return threadIndex
-    .map((s) => {
-      const title = threadTitle(s);
-      const id8 = s.id.slice(0, 8);
-      const cwdLabel = path.basename(s.cwd) || s.cwd;
-      const haystack = `${title} ${id8} ${s.cwd}`.toLowerCase();
-      const score = q ? scoreMatch(haystack, q) : 1;
-      return { title, id8, cwdLabel, modified: s.modified, score };
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || b.modified.getTime() - a.modified.getTime())
-    .map((x) => ({
-      label: x.title,
-      value: x.id8,
-      description: `${x.id8}  ·  ${x.cwdLabel}`,
-    }));
+  return (threadIndex?.suggestSync(query) || []).map((item) => ({
+    label: item.name,
+    value: item.value,
+    description: item.description,
+  }));
 }
 
 function getBashSuggestions(query: string): TextComposerPickerItem[] {
@@ -163,14 +150,37 @@ async function warnAboutLegacyIgnoreFiles(ctx: any): Promise<void> {
   );
 }
 
+async function refreshIndexes(
+  ctx: any,
+  options?: { files?: boolean; threads?: boolean },
+): Promise<void> {
+  if (!fileIndex || (options?.files ?? true)) {
+    fileIndex = createFileIndex(ctx.cwd);
+  }
+  if (options?.files ?? true) {
+    fileIndex.invalidate();
+    await fileIndex.ensureLoaded();
+  }
+
+  if (!threadIndex) {
+    threadIndex = createThreadIndex(ctx.sessionManager.getSessionFile());
+  }
+  if (options?.threads ?? true) {
+    threadIndex.invalidate(ctx.sessionManager.getSessionFile());
+    await threadIndex.ensureLoaded();
+  }
+
+  requestThreadReferenceRender();
+}
+
 async function installThreadComposer(pi: ExtensionAPI, ctx: any): Promise<void> {
   builtInCommands = await discoverBuiltInCommands();
-  fileIndex = createFileIndex(ctx.cwd);
-  await fileIndex.ensureLoaded();
-  threadIndex = await listSessions(ctx.sessionManager.getSessionFile());
+  await refreshIndexes(ctx, { files: true, threads: true });
   refreshBashHistory(ctx);
   pickerOpen = false;
   await warnAboutLegacyIgnoreFiles(ctx);
+
+  setThreadReferenceIndexRefresh((refreshCtx, options) => refreshIndexes(refreshCtx, options));
 
   sharedInteractionDock.setInputHandler((data: string) => {
     const shouldCapture = Boolean(pickerOpen && activeEditor?.shouldCapturePickerKey(data));

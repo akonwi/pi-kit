@@ -51,6 +51,7 @@ export const FALLBACK_BUILT_IN_COMMANDS = [
 let transientBadgeText: string | undefined;
 let transientBadgeUntil = 0;
 let requestEditorRender: (() => void) | undefined;
+let requestIndexRefresh: ((ctx: any, options?: { files?: boolean; threads?: boolean }) => Promise<void>) | undefined;
 
 export function setThreadReferenceRenderRequest(next: (() => void) | undefined): void {
   requestEditorRender = next;
@@ -58,6 +59,19 @@ export function setThreadReferenceRenderRequest(next: (() => void) | undefined):
 
 export function requestThreadReferenceRender(): void {
   requestEditorRender?.();
+}
+
+export function setThreadReferenceIndexRefresh(
+  next: ((ctx: any, options?: { files?: boolean; threads?: boolean }) => Promise<void>) | undefined,
+): void {
+  requestIndexRefresh = next;
+}
+
+export async function requestThreadReferenceIndexRefresh(
+  ctx: any,
+  options?: { files?: boolean; threads?: boolean },
+): Promise<void> {
+  await requestIndexRefresh?.(ctx, options);
 }
 
 export function showTransientBadge(text: string): void {
@@ -584,6 +598,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
         sm.appendSessionInfo(name);
       }
 
+      await refreshIndexes(ctx, { threads: true });
       showTransientBadge("THREAD RENAMED");
       ctx.ui.notify(`Renamed thread to \"${name}\"`, "info");
       return;
@@ -602,6 +617,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
       if (!ok) return;
 
       await rm(chosen.path);
+      await refreshIndexes(ctx, { threads: true });
       showTransientBadge("THREAD DELETED");
       ctx.ui.notify("Thread deleted", "info");
     }
@@ -648,8 +664,11 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     return index >= 0 ? entries[index] : undefined;
   };
 
-  const refreshFileIndex = async (ctx: any): Promise<void> => {
-    fileIndex = await scanFiles(ctx.cwd);
+  const refreshIndexes = async (
+    ctx: any,
+    options?: { files?: boolean; threads?: boolean },
+  ): Promise<void> => {
+    await requestThreadReferenceIndexRefresh(ctx, options);
     requestEditorRender?.();
   };
 
@@ -691,7 +710,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     }
 
     const result = await appendIgnoreEntry(ctx.cwd, absolute, info.isDirectory());
-    await refreshFileIndex(ctx);
+    await refreshIndexes(ctx, { files: true });
 
     if (result.duplicate) {
       ctx.ui.notify(`Already ignored in ${path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE}`, "info");
@@ -721,7 +740,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
         return;
       }
 
-      await refreshFileIndex(ctx);
+      await refreshIndexes(ctx, { files: true });
       const location = path.relative(ctx.cwd, chosen.ignoreFile) || FILE_PICKER_IGNORE_FILE;
       ctx.ui.notify(`Removed ${chosen.entry} from ${location}`, "info");
       showTransientBadge("FILES UNIGNORED");
@@ -742,7 +761,7 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
       return;
     }
 
-    await refreshFileIndex(ctx);
+    await refreshIndexes(ctx, { files: true });
     const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
     ctx.ui.notify(`Removed ${result.entry} from ${location}`, "info");
     showTransientBadge("FILES UNIGNORED");
