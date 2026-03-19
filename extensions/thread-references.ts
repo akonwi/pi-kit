@@ -411,9 +411,36 @@ function buildReferenceBlock(session: SessionInfoLite): string {
   }
 }
 
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+function sessionDirLabel(cwd: string): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const normalized = cwd.startsWith(home)
+    ? `~${cwd.slice(home.length)}`
+    : cwd;
+  return normalized.split("/").pop() || normalized;
+}
+
+export function formatSessionOptionLite(s: SessionInfoLite): { label: string; description: string } {
+  return {
+    label: threadTitle(s),
+    description: `${sessionDirLabel(s.cwd)}  ·  ${formatTimeAgo(s.modified)}  ·  ${s.id.slice(0, 8)}`,
+  };
+}
+
 function optionLabel(s: SessionInfoLite): string {
-  const date = s.modified.toISOString().replace("T", " ").slice(0, 16);
-  return `${threadTitle(s)}  ·  ${date}  ·  ${s.id.slice(0, 8)}`;
+  const option = formatSessionOptionLite(s);
+  return `${option.label}  ·  ${option.description}`;
 }
 
 async function pickSession(
@@ -452,31 +479,6 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
       ctx.ui.pasteToEditor(`${token} `);
       showTransientBadge("THREAD INSERTED");
       ctx.ui.notify(`Inserted ${token}`, "info");
-    },
-  });
-
-  pi.registerCommand("switch", {
-    description: "Switch to another thread/session",
-    handler: async (args, ctx) => {
-      const query = (args || "").trim();
-      const currentSessionPath = ctx.sessionManager.getSessionFile();
-      const sessions = (await listSessions(currentSessionPath)).filter((s) =>
-        query ? matchesQuery(s, query) : true,
-      );
-
-      if (sessions.length === 0) {
-        ctx.ui.notify("No matching threads found", "warning");
-        return;
-      }
-
-      const chosen = await pickSession(sessions, "Switch to thread", ctx);
-      if (!chosen) return;
-
-      const result = await ctx.switchSession(chosen.path);
-      if (result.cancelled) return;
-
-      showTransientBadge("THREAD SWITCHED");
-      ctx.ui.notify(`Switched to ${threadTitle(chosen)} (${chosen.id.slice(0, 8)})`, "info");
     },
   });
 

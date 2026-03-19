@@ -7,6 +7,8 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { isKeyRelease, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
 import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, refreshThreadReferenceIndexes, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
+import { formatSessionOptionLite, listSessions, showTransientBadge, threadTitle, type SessionInfoLite } from "./thread-references";
+import { openFilterPickerScreen } from "./ui/screens/filter-picker-screen";
 import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
 import { createThreadScreen } from "./ui/screens/thread-screen";
 import { openWizardScreen } from "./ui/screens/wizard-screen";
@@ -575,6 +577,40 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     screenManager.activate(createThreadScreen(dockController));
   };
 
+  async function openSessionSwitchPicker(ctx: any, initialQuery: string): Promise<SessionInfoLite | undefined> {
+    const currentSessionPath = ctx.sessionManager.getSessionFile();
+    const sessions = await listSessions(currentSessionPath);
+    if (sessions.length === 0) {
+      ctx.ui.notify("No matching threads found", "warning");
+      return undefined;
+    }
+
+    let screen: ReturnType<typeof openFilterPickerScreen<SessionInfoLite>>["screen"];
+    const opened = openFilterPickerScreen<SessionInfoLite>({
+      ctx,
+      dock: dockController,
+      title: "Switch to thread",
+      items: sessions.map((session) => {
+        const option = formatSessionOptionLite(session);
+        return {
+          label: option.label,
+          description: option.description,
+          value: session,
+          searchText: `${session.id} ${session.cwd} ${session.name || ""} ${session.firstMessage || ""}`,
+        };
+      }),
+      initialQuery,
+      visibleItems: 8,
+      onClosed: () => {
+        screenManager.clearIfActive(screen);
+        activateThreadScreen();
+      },
+    });
+    screen = opened.screen;
+    screenManager.activate(screen);
+    return opened.result;
+  }
+
   function openLongFormPager(ctx: any, pager: LongFormPagerContent, startIndex = 0): void {
     const { sections } = pager;
     if (!ctx.hasUI || sections.length < 2) return;
@@ -840,6 +876,20 @@ export default function piKitExtension(pi: ExtensionAPI): void {
       await writeConfig(config);
       await refreshStatus(ctx);
       ctx.ui.notify(`Speech ${nextEnabled ? "enabled" : "disabled"}`, "info");
+    },
+  });
+
+  pi.registerCommand("switch", {
+    description: "Switch to another thread/session",
+    handler: async (args, ctx) => {
+      const chosen = await openSessionSwitchPicker(ctx, String(args || "").trim());
+      if (!chosen) return;
+
+      const result = await ctx.switchSession(chosen.path);
+      if (result.cancelled) return;
+
+      showTransientBadge("THREAD SWITCHED");
+      ctx.ui.notify(`Switched to ${threadTitle(chosen)} (${chosen.id.slice(0, 8)})`, "info");
     },
   });
 
