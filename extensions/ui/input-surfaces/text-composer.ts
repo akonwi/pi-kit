@@ -218,7 +218,7 @@ export class TextComposerSurface extends CustomEditor {
     const layout = this.lastPanelLayout;
     if (!layout) return;
 
-    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 2;
+    const overlayHeight = Math.min(state.items.length, state.visibleItems) + 3;
     const termRows = process.stdout.rows || 40;
     const row = Math.max(0, termRows - this.dockFooterRows - layout.panelLines - overlayHeight);
 
@@ -395,7 +395,7 @@ export class TextComposerSurface extends CustomEditor {
       }
     }
 
-    while (interior.length < 3) {
+    while (interior.length < 2) {
       interior.push(`${this.border("│")}${" ".repeat(panelInside)}${this.border("│")}`);
     }
 
