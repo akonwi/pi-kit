@@ -5,6 +5,7 @@
  * so this version exposes both async `suggest()` and cached `suggestSync()`.
  */
 
+import path from "node:path";
 import { SessionManager, type SessionInfo } from "@mariozechner/pi-coding-agent";
 import { scoreMatch } from "./score";
 
@@ -19,6 +20,26 @@ function threadTitle(s: SessionInfo): string {
   return head.length <= 80 ? head : `${head.slice(0, 79)}…`;
 }
 
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+function threadDir(s: SessionInfo): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const cwd = s.cwd.startsWith(home)
+    ? `~${s.cwd.slice(home.length)}`
+    : s.cwd;
+  return path.basename(cwd) || cwd;
+}
+
 function formatSuggestions(sessions: SessionInfo[], query: string): ThreadSuggestion[] {
   const q = query.trim();
 
@@ -26,15 +47,25 @@ function formatSuggestions(sessions: SessionInfo[], query: string): ThreadSugges
     .map((s) => {
       const title = threadTitle(s);
       const id8 = s.id.slice(0, 8);
-      const haystack = `${title} ${id8} ${s.cwd}`;
-      const score = q ? scoreMatch(haystack, q) : 1;
-      return { s, title, id8, score };
+      const dir = threadDir(s);
+      const haystack = `${title} ${id8} ${dir} ${s.cwd}`;
+      const haystackScore = q ? scoreMatch(haystack, q) : 1;
+      const titleScore = q ? scoreMatch(title, q) : 0;
+      const dirScore = q ? scoreMatch(dir, q) : 0;
+      const idScore = q ? scoreMatch(id8, q) : 0;
+      const score = q
+        ? Math.max(haystackScore, titleScore + 8, dirScore + 6, idScore + 10)
+        : 1;
+      return { s, title, id8, dir, score };
     })
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || b.s.modified.getTime() - a.s.modified.getTime())
+    .sort((a, b) => {
+      if (!q) return b.s.modified.getTime() - a.s.modified.getTime();
+      return b.score - a.score || b.s.modified.getTime() - a.s.modified.getTime();
+    })
     .map((x) => ({
       name: x.title,
-      description: `${x.id8}  ·  ${x.s.cwd.split("/").pop() || x.s.cwd}`,
+      description: `${x.dir}  ·  ${formatTimeAgo(x.s.modified)}  ·  ${x.id8}`,
       value: x.id8,
     }));
 }
