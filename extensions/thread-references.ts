@@ -51,7 +51,6 @@ export const FALLBACK_BUILT_IN_COMMANDS = [
 let transientBadgeText: string | undefined;
 let transientBadgeUntil = 0;
 let requestEditorRender: (() => void) | undefined;
-let requestIndexRefresh: ((ctx: any, options?: { files?: boolean; threads?: boolean }) => Promise<void>) | undefined;
 
 export function setThreadReferenceRenderRequest(next: (() => void) | undefined): void {
   requestEditorRender = next;
@@ -59,19 +58,6 @@ export function setThreadReferenceRenderRequest(next: (() => void) | undefined):
 
 export function requestThreadReferenceRender(): void {
   requestEditorRender?.();
-}
-
-export function setThreadReferenceIndexRefresh(
-  next: ((ctx: any, options?: { files?: boolean; threads?: boolean }) => Promise<void>) | undefined,
-): void {
-  requestIndexRefresh = next;
-}
-
-export async function requestThreadReferenceIndexRefresh(
-  ctx: any,
-  options?: { files?: boolean; threads?: boolean },
-): Promise<void> {
-  await requestIndexRefresh?.(ctx, options);
 }
 
 export function showTransientBadge(text: string): void {
@@ -115,80 +101,8 @@ export async function discoverBuiltInCommands(): Promise<string[]> {
   }
 }
 
-type IgnoreRule = {
-  raw: string;
-  directoryOnly: boolean;
-  hasSlash: boolean;
-};
-
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
-}
-
-function stripComment(line: string): string {
-  return line.trim();
-}
-
-function wildcardToRegExp(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "::DOUBLE_STAR::")
-    .replace(/\*/g, "[^/]*")
-    .replace(/::DOUBLE_STAR::/g, ".*");
-  return new RegExp(`^${escaped}$`);
-}
-
-function compileIgnoreRules(lines: string[]): IgnoreRule[] {
-  return lines
-    .map((line) => stripComment(line))
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map((line) => {
-      const directoryOnly = line.endsWith("/");
-      const raw = normalizeRelativePath(directoryOnly ? line.slice(0, -1) : line);
-      return {
-        raw,
-        directoryOnly,
-        hasSlash: raw.includes("/"),
-      } satisfies IgnoreRule;
-    })
-    .filter((rule) => rule.raw.length > 0);
-}
-
-async function loadIgnoreRules(cwd: string): Promise<IgnoreRule[]> {
-  const builtIns = compileIgnoreRules(DEFAULT_FILE_SCAN_EXCLUDES.map((name) => `${name}/`));
-  const ignorePath = path.join(cwd, FILE_PICKER_IGNORE_FILE);
-
-  try {
-    const content = await readFile(ignorePath, "utf8");
-    const custom = compileIgnoreRules(content.split(/\r?\n/g));
-    return [...builtIns, ...custom];
-  } catch {
-    return builtIns;
-  }
-}
-
-function matchesIgnoreRule(relativePath: string, rule: IgnoreRule, isDirectory: boolean): boolean {
-  const normalized = normalizeRelativePath(relativePath);
-  if (!normalized) return false;
-
-  if (rule.directoryOnly && !isDirectory && !normalized.startsWith(`${rule.raw}/`)) {
-    return false;
-  }
-
-  if (!rule.hasSlash) {
-    const segmentRegex = wildcardToRegExp(rule.raw);
-    const segments = normalized.split("/");
-
-    if (rule.directoryOnly) {
-      return segments.some((segment) => segmentRegex.test(segment));
-    }
-
-    return segments.some((segment) => segmentRegex.test(segment));
-  }
-
-  const pathRegex = wildcardToRegExp(rule.raw);
-  if (pathRegex.test(normalized)) return true;
-  return rule.directoryOnly && normalized.startsWith(`${rule.raw}/`);
 }
 
 function isWithinDir(child: string, parent: string): boolean {
