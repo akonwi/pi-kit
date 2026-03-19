@@ -3,6 +3,7 @@ import { Key, matchesKey } from "@mariozechner/pi-tui";
 type PickerOverlayItem = {
   label: string;
   value: string;
+  description?: string;
 };
 
 export type PickerOverlayState = {
@@ -40,6 +41,10 @@ function fitToWidth(text: string, width: number): string {
   const plain = stripAnsi(text);
   if (plain.length >= width) return plain.slice(0, width);
   return plain + " ".repeat(width - plain.length);
+}
+
+function plainLen(text: string): number {
+  return stripAnsi(text).length;
 }
 
 class PickerOverlayComponent {
@@ -87,26 +92,36 @@ class PickerOverlayComponent {
     if (!state || state.items.length === 0) return [];
 
     const inside = Math.max(8, width - 2);
-    const border = (text: string) => this.theme?.fg ? this.theme.fg("borderAccent", text) : text;
+    const border = (text: string) => this.theme?.fg ? this.theme.fg("borderMuted", text) : text;
     const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
-    const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("accent", text) : text;
+    const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("pickerFocusedText", text) : text;
 
     const visibleItems = Math.max(1, Math.min(state.visibleItems, state.items.length));
     const preferredStart = state.selected - Math.floor(visibleItems / 2);
     const start = Math.max(0, Math.min(preferredStart, state.items.length - visibleItems));
     const end = Math.min(state.items.length, start + visibleItems);
+    const visible = state.items.slice(start, end);
+    const maxLabelLen = visible.reduce((max, item) => Math.max(max, plainLen(item.label)), 0);
+    const labelWidth = Math.max(0, Math.min(maxLabelLen + 2, Math.floor(inside * 0.6)));
 
-    const lines = [border(`╭${"─".repeat(inside)}╮`)];
+    const lines = [border(`┌${"─".repeat(inside)}┐`)];
 
     for (let index = start; index < end; index++) {
       const item = state.items[index]!;
       const selected = index === state.selected;
       const marker = selected ? selectedFg("› ") : "  ";
-      const text = fitToWidth(`${marker}${item.label}`, inside);
-      lines.push(`${border("│")}${selected ? selectedBg(text) : text}${border("│")}`);
+      const rawLabel = `${marker}${item.label}`;
+      const description = item.description ? ` ${item.description}` : "";
+
+      const text = description && labelWidth > 0
+        ? fitToWidth(`${fitToWidth(rawLabel, labelWidth)}${description}`, inside)
+        : fitToWidth(rawLabel, inside);
+
+      const painted = selected ? selectedBg(selectedFg(text)) : text;
+      lines.push(`${border("│")}${painted}${border("│")}`);
     }
 
-    lines.push(border(`╰${"─".repeat(inside)}╯`));
+    lines.push(border(`└${"─".repeat(inside)}┘`));
     return lines;
   }
 

@@ -8,13 +8,14 @@ export type TextComposerPickerKind = "slash" | "file" | "bash" | "thread";
 export type TextComposerPickerItem = {
   label: string;
   value: string;
+  description?: string;
 };
 
 export type TextComposerSuggestionProviders = {
-  getSlashSuggestions(query: string): string[];
-  getFileSuggestions(query: string): string[];
+  getSlashSuggestions(query: string): TextComposerPickerItem[];
+  getFileSuggestions(query: string): TextComposerPickerItem[];
   getThreadSuggestions(query: string): TextComposerPickerItem[];
-  getBashSuggestions(query: string): string[];
+  getBashSuggestions(query: string): TextComposerPickerItem[];
 };
 
 export type TextComposerSurfaceOptions = {
@@ -95,15 +96,15 @@ export class TextComposerSurface extends CustomEditor {
 
   constructor(
     tui: any,
-    theme: any,
+    private readonly shellTheme: any,
     keybindings: any,
     private readonly providers: TextComposerSuggestionProviders,
     options: TextComposerSurfaceOptions = {},
   ) {
-    super(tui, theme, keybindings);
+    super(tui, shellTheme, keybindings);
     this.pickerOverlay = new AnchoredPickerOverlayController(
       tui,
-      theme,
+      shellTheme,
       {
         onUp: () => {
           if (!this.picker) return;
@@ -190,6 +191,14 @@ export class TextComposerSurface extends CustomEditor {
     return this.dockState.surface === "text-composer" && this.dockState.supportsPicker;
   }
 
+  private border(text: string): string {
+    return this.shellTheme?.fg ? this.shellTheme.fg("borderMuted", text) : text;
+  }
+
+  private badge(text: string): string {
+    return this.shellTheme?.fg ? this.shellTheme.fg("accent", text) : text;
+  }
+
   private getPickerOverlayState(): PickerOverlayState | undefined {
     if (!this.picker || this.picker.items.length === 0) return undefined;
     return {
@@ -248,8 +257,7 @@ export class TextComposerSurface extends CustomEditor {
     if (slashMatch) {
       const prefix = slashMatch[1] || "/";
       const query = prefix.slice(1);
-      const items = this.providers.getSlashSuggestions(query)
-        .map((value) => ({ label: value, value }));
+      const items = this.providers.getSlashSuggestions(query);
       this.setPicker(items.length > 0 ? { kind: "slash", prefix, items, selected: 0 } : undefined);
       return;
     }
@@ -267,8 +275,7 @@ export class TextComposerSurface extends CustomEditor {
     if (fileMatch) {
       const prefix = fileMatch[1] || "@";
       const query = prefix.slice(1);
-      const items = this.providers.getFileSuggestions(query)
-        .map((value) => ({ label: value, value }));
+      const items = this.providers.getFileSuggestions(query);
       this.setPicker(items.length > 0 ? { kind: "file", prefix, items, selected: 0 } : undefined);
       return;
     }
@@ -277,8 +284,7 @@ export class TextComposerSurface extends CustomEditor {
     if (bashMatch) {
       const prefix = bashMatch[1] || "!";
       const query = prefix.slice(1);
-      const items = this.providers.getBashSuggestions(query)
-        .map((value) => ({ label: `!${value}`, value }));
+      const items = this.providers.getBashSuggestions(query);
       this.setPicker(items.length > 0 ? { kind: "bash", prefix, items, selected: 0 } : undefined);
       return;
     }
@@ -382,25 +388,25 @@ export class TextComposerSurface extends CustomEditor {
       for (let chunkIndex = 0; chunkIndex < wrapped.length; chunkIndex++) {
         const chunk = wrapped[chunkIndex] || "";
         if (this.focused && i === cursor.line && chunkIndex === cursorChunkIndex) {
-          interior.push(`│${paintCursorBlock(chunk, panelInside, cursorColInChunk)}│`);
+          interior.push(`${this.border("│")}${paintCursorBlock(chunk, panelInside, cursorColInChunk)}${this.border("│")}`);
         } else {
-          interior.push(`│${fitToWidth(chunk, panelInside)}│`);
+          interior.push(`${this.border("│")}${fitToWidth(chunk, panelInside)}${this.border("│")}`);
         }
       }
     }
 
     while (interior.length < 3) {
-      interior.push(`│${" ".repeat(panelInside)}│`);
+      interior.push(`${this.border("│")}${" ".repeat(panelInside)}${this.border("│")}`);
     }
 
-    const top = `╭${"─".repeat(panelInside)}╮`;
+    const top = this.border(`┌${"─".repeat(panelInside)}┐`);
     const badge = this.getTransientBadge();
     const badgeLabel = badge ? ` ${badge} ` : "";
     let bottomInside = "─".repeat(panelInside);
     if (badgeLabel && badgeLabel.length < panelInside) {
-      bottomInside = "─".repeat(panelInside - badgeLabel.length) + badgeLabel;
+      bottomInside = `${"─".repeat(panelInside - badgeLabel.length)}${this.badge(badgeLabel)}`;
     }
-    const bottom = `╰${bottomInside}╯`;
+    const bottom = this.border(`└${bottomInside}┘`);
 
     const pad = " ".repeat(margin);
     const panelLines = [top, ...interior, bottom].map((line) => `${pad}${line}${pad}`);

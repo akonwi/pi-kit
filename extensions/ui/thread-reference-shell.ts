@@ -69,23 +69,46 @@ function pushBashHistory(command: string): void {
   bashHistory = [parsed, ...bashHistory.filter((c) => c !== parsed)].slice(0, 200);
 }
 
-function getSlashSuggestions(pi: ExtensionAPI, query: string): string[] {
-  const extensionCommands = pi.getCommands().map((c) => c.name);
-  const all = Array.from(new Set([...builtInCommands, ...extensionCommands])).map((n) => `/${n}`);
-  return all
-    .map((value) => ({ value, score: scoreMatch(value.slice(1), query) }))
+function getSlashSuggestions(pi: ExtensionAPI, query: string): TextComposerPickerItem[] {
+  const extensionCommands = pi.getCommands();
+  const extensionCommandNames = extensionCommands.map((c) => c.name);
+  const commandDescriptions = new Map<string, string>();
+
+  for (const command of extensionCommands) {
+    if (typeof command.name !== "string" || !command.name.trim()) continue;
+    const description = typeof (command as { description?: unknown }).description === "string"
+      ? String((command as { description?: unknown }).description)
+      : "";
+    commandDescriptions.set(command.name, description);
+  }
+
+  return Array.from(new Set([...builtInCommands, ...extensionCommandNames]))
+    .map((name) => {
+      const value = `/${name}`;
+      return {
+        label: value,
+        value,
+        description: commandDescriptions.get(name) || "",
+        score: scoreMatch(name, query),
+      };
+    })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
-    .map((x) => x.value);
+    .map(({ label, value, description }) => ({ label, value, description }));
 }
 
-function getFileSuggestions(query: string): string[] {
+function getFileSuggestions(query: string): TextComposerPickerItem[] {
   const norm = query.replace(/^@/, "").toLowerCase();
   return fileIndex
-    .map((p) => ({ value: `@${p}`, score: scoreMatch(p.toLowerCase(), norm) }))
+    .map((p) => ({
+      label: `@${p}`,
+      value: `@${p}`,
+      description: p.endsWith("/") ? "directory" : "",
+      score: scoreMatch(p.toLowerCase(), norm),
+    }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.value.localeCompare(b.value))
-    .map((x) => x.value);
+    .map(({ label, value, description }) => ({ label, value, description }));
 }
 
 function getThreadSuggestions(query: string): TextComposerPickerItem[] {
@@ -94,22 +117,32 @@ function getThreadSuggestions(query: string): TextComposerPickerItem[] {
     .map((s) => {
       const title = threadTitle(s);
       const id8 = s.id.slice(0, 8);
+      const cwdLabel = path.basename(s.cwd) || s.cwd;
       const haystack = `${title} ${id8} ${s.cwd}`.toLowerCase();
       const score = q ? scoreMatch(haystack, q) : 1;
-      return { s, title, id8, score };
+      return { title, id8, cwdLabel, modified: s.modified, score };
     })
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || b.s.modified.getTime() - a.s.modified.getTime())
-    .map((x) => ({ label: `${x.title}  ·  ${x.id8}`, value: x.id8 }));
+    .sort((a, b) => b.score - a.score || b.modified.getTime() - a.modified.getTime())
+    .map((x) => ({
+      label: x.title,
+      value: x.id8,
+      description: `${x.id8}  ·  ${x.cwdLabel}`,
+    }));
 }
 
-function getBashSuggestions(query: string): string[] {
+function getBashSuggestions(query: string): TextComposerPickerItem[] {
   const q = query.trim().toLowerCase();
   return bashHistory
-    .map((cmd) => ({ cmd, score: scoreMatch(cmd.toLowerCase(), q) }))
+    .map((cmd) => ({
+      label: `!${cmd}`,
+      value: cmd,
+      description: "recent bash",
+      score: scoreMatch(cmd.toLowerCase(), q),
+    }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
-    .map((x) => x.cmd);
+    .map(({ label, value, description }) => ({ label, value, description }));
 }
 
 async function warnAboutLegacyIgnoreFiles(ctx: any): Promise<void> {
