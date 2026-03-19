@@ -18,6 +18,29 @@ import {
   showTransientBadge,
 } from "../thread-references";
 
+const BUILT_IN_COMMAND_DESCRIPTIONS: Record<string, string> = {
+  login: "Authenticate with a provider",
+  logout: "Clear provider authentication",
+  model: "Select a model",
+  "scoped-models": "Show models available for the current provider/session",
+  settings: "Open or inspect settings",
+  resume: "Resume a recent session",
+  new: "Start a new session",
+  name: "Rename the current session",
+  session: "Show current session details",
+  tree: "Show the session tree",
+  fork: "Fork the current session/thread",
+  compact: "Compact the current conversation",
+  copy: "Copy the latest response",
+  export: "Export the current session",
+  share: "Share the current session",
+  reload: "Reload extensions, prompts, and themes",
+  hotkeys: "Show keyboard shortcuts",
+  changelog: "Show recent Pi changes",
+  quit: "Quit Pi",
+  exit: "Quit Pi",
+};
+
 let fileIndex: FileIndex | undefined;
 let threadIndex: ThreadIndex | undefined;
 let currentCtx: any;
@@ -79,6 +102,12 @@ function getSlashSuggestions(pi: ExtensionAPI, query: string): TextComposerPicke
       ? String((command as { description?: unknown }).description)
       : "";
     commandDescriptions.set(command.name, description);
+  }
+
+  for (const [name, description] of Object.entries(BUILT_IN_COMMAND_DESCRIPTIONS)) {
+    if (!commandDescriptions.has(name)) {
+      commandDescriptions.set(name, description);
+    }
   }
 
   return Array.from(new Set([...builtInCommands, ...extensionCommandNames]))

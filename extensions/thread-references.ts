@@ -686,18 +686,8 @@ export default function threadReferencesExtension(pi: ExtensionAPI) {
     handler: fileIgnoreHandler,
   });
 
-  pi.registerCommand("files-ignore", {
-    description: "Alias for /files:ignore",
-    handler: fileIgnoreHandler,
-  });
-
   pi.registerCommand("files:unignore", {
     description: "Remove a file or directory from .pi-files-ignore",
-    handler: fileUnignoreHandler,
-  });
-
-  pi.registerCommand("files-unignore", {
-    description: "Alias for /files:unignore",
     handler: fileUnignoreHandler,
   });
 
