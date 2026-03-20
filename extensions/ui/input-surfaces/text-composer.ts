@@ -204,6 +204,17 @@ export class TextComposerSurface extends CustomEditor {
     return this.shellTheme?.fg ? this.shellTheme.fg("accent", text) : text;
   }
 
+  private dim(text: string): string {
+    return this.shellTheme?.fg ? this.shellTheme.fg("dim", text) : text;
+  }
+
+  private getEmptyPlaceholder(): string | undefined {
+    if (this.dockState.mode === "pager") {
+      return "Add a note for this section... (Ctrl+Enter to submit all)";
+    }
+    return undefined;
+  }
+
   private getPickerOverlayState(): PickerOverlayState | undefined {
     if (!this.picker || this.picker.items.length === 0) return undefined;
     return {
@@ -412,28 +423,37 @@ export class TextComposerSurface extends CustomEditor {
 
     const logicalLines = this.getLines();
     const cursor = this.getCursor();
+    const placeholder = this.getEmptyPlaceholder();
+    const isEmpty = logicalLines.length === 1 && (logicalLines[0] || "").length === 0;
 
     const interior: string[] = [];
-    for (let i = 0; i < logicalLines.length; i++) {
-      const line = logicalLines[i] || "";
-      const wrapped = wrapPlainText(line, panelInside);
-
-      let cursorChunkIndex = -1;
-      let cursorColInChunk = 0;
-      if (this.focused && i === cursor.line) {
-        const safeCol = Math.max(0, cursor.col);
-        cursorChunkIndex = Math.floor(safeCol / panelInside);
-        if (cursorChunkIndex >= wrapped.length) cursorChunkIndex = wrapped.length - 1;
-        if (cursorChunkIndex < 0) cursorChunkIndex = 0;
-        cursorColInChunk = safeCol - cursorChunkIndex * panelInside;
+    if (placeholder && isEmpty) {
+      const wrappedPlaceholder = wrapPlainText(placeholder, panelInside);
+      for (const chunk of wrappedPlaceholder) {
+        interior.push(`${this.border("│")}${fitToWidth(this.dim(chunk), panelInside)}${this.border("│")}`);
       }
+    } else {
+      for (let i = 0; i < logicalLines.length; i++) {
+        const line = logicalLines[i] || "";
+        const wrapped = wrapPlainText(line, panelInside);
 
-      for (let chunkIndex = 0; chunkIndex < wrapped.length; chunkIndex++) {
-        const chunk = wrapped[chunkIndex] || "";
-        if (this.focused && i === cursor.line && chunkIndex === cursorChunkIndex) {
-          interior.push(`${this.border("│")}${paintCursorBlock(chunk, panelInside, cursorColInChunk)}${this.border("│")}`);
-        } else {
-          interior.push(`${this.border("│")}${fitToWidth(chunk, panelInside)}${this.border("│")}`);
+        let cursorChunkIndex = -1;
+        let cursorColInChunk = 0;
+        if (this.focused && i === cursor.line) {
+          const safeCol = Math.max(0, cursor.col);
+          cursorChunkIndex = Math.floor(safeCol / panelInside);
+          if (cursorChunkIndex >= wrapped.length) cursorChunkIndex = wrapped.length - 1;
+          if (cursorChunkIndex < 0) cursorChunkIndex = 0;
+          cursorColInChunk = safeCol - cursorChunkIndex * panelInside;
+        }
+
+        for (let chunkIndex = 0; chunkIndex < wrapped.length; chunkIndex++) {
+          const chunk = wrapped[chunkIndex] || "";
+          if (this.focused && i === cursor.line && chunkIndex === cursorChunkIndex) {
+            interior.push(`${this.border("│")}${paintCursorBlock(chunk, panelInside, cursorColInChunk)}${this.border("│")}`);
+          } else {
+            interior.push(`${this.border("│")}${fitToWidth(chunk, panelInside)}${this.border("│")}`);
+          }
         }
       }
     }
