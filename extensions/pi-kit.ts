@@ -133,12 +133,6 @@ async function writeConfig(next: KitConfig): Promise<void> {
   await rename(temp, CONFIG_PATH);
 }
 
-function renderStatus(config: KitConfig): string {
-  const bell = config.bells.enabled ? "🔔 on" : "🔕 off";
-  const speech = config.speech.enabled ? "🗣 on" : "🤫 off";
-  return `${bell}  ${speech}`;
-}
-
 function getExplicitSessionName(ctx: any): string {
   return typeof ctx.sessionManager?.getSessionName === "function"
     ? String(ctx.sessionManager.getSessionName() || "").trim()
@@ -185,6 +179,17 @@ function withHorizontalPadding(line: string, totalWidth: number, pad: number): s
   const innerWidth = Math.max(0, totalWidth - safePad * 2);
   const inner = innerWidth > 0 ? truncateToWidth(line, innerWidth, true) : "";
   return `${" ".repeat(safePad)}${inner}${" ".repeat(safePad)}`;
+}
+
+function parseContextPercent(value: string): number {
+  const n = parseFloat(String(value || "0").replace(/%$/, ""));
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+}
+
+function colorContextPercent(theme: any, contextPct: string): string {
+  const pct = parseContextPercent(contextPct);
+  const color = pct >= 90 ? "error" : pct >= 80 ? "warning" : "dim";
+  return theme?.fg ? theme.fg(color, contextPct) : contextPct;
 }
 
 function writeBell(): void {
@@ -762,8 +767,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
           const gitBranch = footerData.getGitBranch?.();
           const cwd = gitBranch ? `${cwdBase} (${gitBranch})` : cwdBase;
           const sessionName = deriveFooterSessionLabel(ctx);
-          const row1Left = theme.fg("muted", `${cwd} • ${sessionName}`);
-          const row1Right = theme.fg("dim", renderStatus(currentConfig));
+          const left = theme.fg("muted", `${cwd} • ${sessionName}`);
 
           const contextUsage = ctx.getContextUsage?.();
           const maxTokens =
@@ -779,20 +783,14 @@ export default function piKitExtension(pi: ExtensionAPI): void {
               : "0%";
           const modelId = ctx.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel?.() || "off";
-          const thinkingEmoji =
-            thinkingLevel === "high" ? "🔥" :
-            thinkingLevel === "medium" ? "💡" :
-            thinkingLevel === "low" ? "💤" : "⛔";
-          const row2Left = theme.fg("dim", `[${modelId}][${thinkingEmoji}] 🪟${contextPct}`);
-          const row2Right = theme.fg("dim", "");
+          const bell = currentConfig.bells.enabled ? "🔔" : "🔕";
+          const speech = currentConfig.speech.enabled ? "🗣" : "🤫";
+          const right = `${theme.fg("dim", `${modelId} (${thinkingLevel})`)} ${colorContextPercent(theme, contextPct)}  ${theme.fg("dim", `${bell} ${speech}`)}`;
 
           const footerPadX = 1;
           const innerWidth = Math.max(1, width - footerPadX * 2);
 
-          return [
-            withHorizontalPadding(padBetween(row1Left, row1Right, innerWidth), width, footerPadX),
-            withHorizontalPadding(padBetween(row2Left, row2Right, innerWidth), width, footerPadX),
-          ];
+          return [withHorizontalPadding(padBetween(left, right, innerWidth), width, footerPadX)];
         },
       };
     });
@@ -1153,8 +1151,6 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_end", async (event, ctx) => {
-    const config = await readConfig();
-
     await maybeAutoNameSession(pi, ctx);
 
     const lastAssistant = [...event.messages]

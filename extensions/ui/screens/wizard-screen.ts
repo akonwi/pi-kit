@@ -100,12 +100,9 @@ export function openWizardScreen(options: WizardScreenOptions): {
   };
   options.setRenderDelegate(dockDelegate);
 
-  if (intro) {
-    ctx.ui.notify(`${title}: ${intro}`, "info");
-  }
   ctx.ui.setStatus(
     "wizard",
-    ctx.ui.theme.fg("dim", "wizard: Tab/Enter next • Shift+Tab prev • Esc cancel"),
+    ctx.ui.theme.fg("dim", "wizard: answer in dock • Shift+Tab prev • Esc cancel"),
   );
 
   // Screen overlay for question context
@@ -132,13 +129,18 @@ export function openWizardScreen(options: WizardScreenOptions): {
 
           const content = [
             `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
-            row(theme.fg("accent", theme.bold(title))),
+            row(theme.fg("text", theme.bold(title))),
+          ];
+
+          if (intro) content.push(row(theme.fg("muted", clip(intro, 120))));
+
+          content.push(
             row(
               `${theme.fg("dim", `Question ${surface.getQuestionIndex() + 1}/${surface.getQuestionCount()} • ${surface.getAnsweredCount()} answered`)}  ${surface.getProgressDots()}`,
             ),
             row(),
             row(theme.fg("text", theme.bold(q.label))),
-          ];
+          );
 
           if (q.help) content.push(row(theme.fg("muted", q.help)));
           if (prevAnswer) content.push(row(theme.fg("dim", `Current: ${clip(prevAnswer, 80)}`)));

@@ -336,6 +336,8 @@ export class WizardInputSurface {
     const bc = (s: string) => this.theme.fg("borderAccent", s);
     const fit = (s: string) => fitLine(s, inside);
     const row = (content = "") => `${bc("│")}${fit(content)}${bc("│")}`;
+    const selectedBg = (text: string) => this.theme?.bg ? this.theme.bg("selectedBg", text) : `\x1b[7m${text}\x1b[27m`;
+    const selectedFg = (text: string) => this.theme?.fg ? this.theme.fg("pickerFocusedText", text) : text;
 
     const q = this.getQuestion();
     const isTextMode = q.kind === "text" || this.mode === "text" || this.mode === "otherText";
@@ -356,14 +358,18 @@ export class WizardInputSurface {
       const opts = this.getSelectOptions(q);
       for (let i = 0; i < opts.length; i++) {
         const selected = i === this.selectIndex;
-        const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
-        const text = selected ? this.theme.fg("accent", opts[i]!) : opts[i]!;
-        lines.push(row(`${prefix}${text}`));
+        const content = `${selected ? "› " : "  "}${opts[i]!}`;
+        lines.push(row(selected ? selectedBg(selectedFg(fit(content))) : fit(content)));
       }
     }
 
     lines.push(row());
-    lines.push(row(this.theme.fg("dim", "↑/↓ move • Enter/Tab next • Shift+Tab prev • Esc cancel")));
+    const hint = this.mode === "otherText"
+      ? "Enter submit • Esc back • Shift+Tab prev"
+      : isTextMode
+        ? "Enter submit • Shift+Tab prev • Esc cancel"
+        : "↑/↓ move • Enter select • Shift+Tab prev • Esc cancel";
+    lines.push(row(this.theme.fg("dim", hint)));
     lines.push(`${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`);
 
     return lines;
