@@ -1,4 +1,4 @@
-import { appendFile, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -458,92 +458,6 @@ async function pickSession(
 }
 
 export default function threadReferencesExtension(pi: ExtensionAPI) {
-  pi.registerCommand("threads", {
-    description: "List other sessions and insert a [[thread:<id>]] reference",
-    handler: async (args, ctx) => {
-      const query = (args || "").trim();
-      const currentSessionPath = ctx.sessionManager.getSessionFile();
-      const sessions = (await listSessions(currentSessionPath)).filter((s) =>
-        query ? matchesQuery(s, query) : true,
-      );
-
-      if (sessions.length === 0) {
-        ctx.ui.notify("No matching threads found", "warning");
-        return;
-      }
-
-      const chosen = await pickSession(sessions, "Insert thread reference", ctx);
-      if (!chosen) return;
-
-      const token = `[[thread:${chosen.id.slice(0, 8)}]]`;
-      ctx.ui.pasteToEditor(`${token} `);
-      showTransientBadge("THREAD INSERTED");
-      ctx.ui.notify(`Inserted ${token}`, "info");
-    },
-  });
-
-  const manageHandler = async (args: string | undefined, ctx: any) => {
-    const query = (args || "").trim();
-    const currentSessionPath = ctx.sessionManager.getSessionFile();
-    const sessions = (await listSessions(currentSessionPath, true)).filter((s) =>
-      query ? matchesQuery(s, query) : true,
-    );
-
-    if (sessions.length === 0) {
-      ctx.ui.notify("No matching threads found", "warning");
-      return;
-    }
-
-    const chosen = await pickSession(sessions, "Manage thread", ctx);
-    if (!chosen) return;
-
-    const isCurrent = currentSessionPath && chosen.path === currentSessionPath;
-    const action = await ctx.ui.select("Action", ["Rename", "Delete"]);
-    if (!action) return;
-
-    if (action === "Rename") {
-      const suggested = chosen.name?.trim() || threadTitle(chosen);
-      const value = await ctx.ui.input("New thread name", suggested);
-      const name = (value || "").trim();
-      if (!name) return;
-
-      if (isCurrent) {
-        pi.setSessionName(name);
-      } else {
-        const sm = SessionManager.open(chosen.path);
-        sm.appendSessionInfo(name);
-      }
-
-      await refreshIndexes(ctx, { threads: true });
-      showTransientBadge("THREAD RENAMED");
-      ctx.ui.notify(`Renamed thread to \"${name}\"`, "info");
-      return;
-    }
-
-    if (action === "Delete") {
-      if (isCurrent) {
-        ctx.ui.notify("Cannot delete the currently active thread", "warning");
-        return;
-      }
-
-      const ok = await ctx.ui.confirm(
-        "Delete thread?",
-        `Permanently delete \"${threadTitle(chosen)}\" (${chosen.id.slice(0, 8)})?`,
-      );
-      if (!ok) return;
-
-      await rm(chosen.path);
-      await refreshIndexes(ctx, { threads: true });
-      showTransientBadge("THREAD DELETED");
-      ctx.ui.notify("Thread deleted", "info");
-    }
-  };
-
-  pi.registerCommand("threads:manage", {
-    description: "Rename or delete a thread",
-    handler: manageHandler,
-  });
-
   const choosePathToIgnore = async (ctx: any): Promise<string | null | undefined> => {
     if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
     const items = await scanPathPickerItems(ctx.cwd);

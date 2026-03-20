@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { isKeyRelease, truncateToWidth as tuiTruncateToWidth, visibleWidth as tu
 import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, refreshThreadReferenceIndexes, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
 import { formatSessionOptionLite, listSessions, showTransientBadge, threadTitle, type SessionInfoLite } from "./thread-references";
 import { openFilterPickerScreen } from "./ui/screens/filter-picker-screen";
+import { openTextInputScreen } from "./ui/screens/text-input-screen";
 import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
 import { createThreadScreen } from "./ui/screens/thread-screen";
 import { openWizardScreen } from "./ui/screens/wizard-screen";
@@ -577,9 +578,16 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     screenManager.activate(createThreadScreen(dockController));
   };
 
-  async function openSessionSwitchPicker(ctx: any, initialQuery: string): Promise<SessionInfoLite | undefined> {
+  async function openSessionPicker(
+    ctx: any,
+    options: {
+      title: string;
+      initialQuery?: string;
+      includeCurrent?: boolean;
+    },
+  ): Promise<SessionInfoLite | undefined> {
     const currentSessionPath = ctx.sessionManager.getSessionFile();
-    const sessions = await listSessions(currentSessionPath);
+    const sessions = await listSessions(currentSessionPath, options.includeCurrent ?? false);
     if (sessions.length === 0) {
       ctx.ui.notify("No matching threads found", "warning");
       return undefined;
@@ -589,7 +597,7 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     const opened = openFilterPickerScreen<SessionInfoLite>({
       ctx,
       dock: dockController,
-      title: "Switch to thread",
+      title: options.title,
       items: sessions.map((session) => {
         const option = formatSessionOptionLite(session);
         return {
@@ -599,8 +607,64 @@ export default function piKitExtension(pi: ExtensionAPI): void {
           searchText: `${session.id} ${session.cwd} ${session.name || ""} ${session.firstMessage || ""}`,
         };
       }),
-      initialQuery,
+      initialQuery: options.initialQuery || "",
       visibleItems: 8,
+      onClosed: () => {
+        screenManager.clearIfActive(screen);
+        activateThreadScreen();
+      },
+    });
+    screen = opened.screen;
+    screenManager.activate(screen);
+    return opened.result;
+  }
+
+  async function openManageThreadActionPicker(
+    ctx: any,
+    session: SessionInfoLite,
+    isCurrent: boolean,
+  ): Promise<"Rename" | "Delete" | undefined> {
+    let screen: ReturnType<typeof openFilterPickerScreen<"Rename" | "Delete">>["screen"];
+    const opened = openFilterPickerScreen<"Rename" | "Delete">({
+      ctx,
+      dock: dockController,
+      title: `Manage ${threadTitle(session)}`,
+      items: [
+        {
+          label: "Rename",
+          description: isCurrent ? "rename current thread" : "rename selected thread",
+          value: "Rename",
+          searchText: "rename",
+        },
+        {
+          label: "Delete",
+          description: isCurrent ? "cannot delete current thread" : "delete selected thread",
+          value: "Delete",
+          searchText: "delete remove",
+        },
+      ],
+      visibleItems: 2,
+      onClosed: () => {
+        screenManager.clearIfActive(screen);
+        activateThreadScreen();
+      },
+    });
+    screen = opened.screen;
+    screenManager.activate(screen);
+    return opened.result;
+  }
+
+  async function openThreadRenameInput(
+    ctx: any,
+    session: SessionInfoLite,
+  ): Promise<string | undefined> {
+    let screen: ReturnType<typeof openTextInputScreen>["screen"];
+    const opened = openTextInputScreen({
+      ctx,
+      dock: dockController,
+      title: `Rename ${threadTitle(session)}`,
+      initialValue: session.name?.trim() || threadTitle(session),
+      placeholder: "New thread name",
       onClosed: () => {
         screenManager.clearIfActive(screen);
         activateThreadScreen();
@@ -879,10 +943,29 @@ export default function piKitExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("threads", {
+    description: "List other sessions and insert a [[thread:<id>]] reference",
+    handler: async (args, ctx) => {
+      const chosen = await openSessionPicker(ctx, {
+        title: "Insert thread reference",
+        initialQuery: String(args || "").trim(),
+      });
+      if (!chosen) return;
+
+      const token = `[[thread:${chosen.id.slice(0, 8)}]]`;
+      ctx.ui.pasteToEditor(`${token} `);
+      showTransientBadge("THREAD INSERTED");
+      ctx.ui.notify(`Inserted ${token}`, "info");
+    },
+  });
+
   pi.registerCommand("switch", {
     description: "Switch to another thread/session",
     handler: async (args, ctx) => {
-      const chosen = await openSessionSwitchPicker(ctx, String(args || "").trim());
+      const chosen = await openSessionPicker(ctx, {
+        title: "Switch to thread",
+        initialQuery: String(args || "").trim(),
+      });
       if (!chosen) return;
 
       const result = await ctx.switchSession(chosen.path);
@@ -890,6 +973,57 @@ export default function piKitExtension(pi: ExtensionAPI): void {
 
       showTransientBadge("THREAD SWITCHED");
       ctx.ui.notify(`Switched to ${threadTitle(chosen)} (${chosen.id.slice(0, 8)})`, "info");
+    },
+  });
+
+  pi.registerCommand("threads:manage", {
+    description: "Rename or delete a thread",
+    handler: async (args, ctx) => {
+      const chosen = await openSessionPicker(ctx, {
+        title: "Manage thread",
+        initialQuery: String(args || "").trim(),
+        includeCurrent: true,
+      });
+      if (!chosen) return;
+
+      const currentSessionPath = ctx.sessionManager.getSessionFile();
+      const isCurrent = Boolean(currentSessionPath && chosen.path === currentSessionPath);
+      const action = await openManageThreadActionPicker(ctx, chosen, isCurrent);
+      if (!action) return;
+
+      if (action === "Rename") {
+        const value = await openThreadRenameInput(ctx, chosen);
+        const name = (value || "").trim();
+        if (!name) return;
+
+        if (isCurrent) {
+          pi.setSessionName(name);
+        } else {
+          const sm = SessionManager.open(chosen.path);
+          sm.appendSessionInfo(name);
+        }
+
+        await refreshThreadReferenceIndexes({ threads: true });
+        showTransientBadge("THREAD RENAMED");
+        ctx.ui.notify(`Renamed thread to \"${name}\"`, "info");
+        return;
+      }
+
+      if (isCurrent) {
+        ctx.ui.notify("Cannot delete the currently active thread", "warning");
+        return;
+      }
+
+      const ok = await ctx.ui.confirm(
+        "Delete thread?",
+        `Permanently delete \"${threadTitle(chosen)}\" (${chosen.id.slice(0, 8)})?`,
+      );
+      if (!ok) return;
+
+      await rm(chosen.path);
+      await refreshThreadReferenceIndexes({ threads: true });
+      showTransientBadge("THREAD DELETED");
+      ctx.ui.notify("Thread deleted", "info");
     },
   });
 
