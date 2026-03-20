@@ -8,6 +8,7 @@ import { Type } from "@sinclair/typebox";
 import { isKeyRelease, truncateToWidth as tuiTruncateToWidth, visibleWidth as tuiVisibleWidth } from "@mariozechner/pi-tui";
 import { ensureThreadReferenceEditorInstalled, handleThreadReferenceHandoff, handleThreadReferenceUserBash, refreshThreadReferenceComposer, refreshThreadReferenceIndexes, setActiveEditorRenderDelegate, setThreadReferenceDockState } from "./ui/thread-reference-shell";
 import { formatSessionOptionLite, listSessions, showTransientBadge, threadTitle, type SessionInfoLite } from "./thread-references";
+import { splitSections } from "./pager/split-sections";
 import { openFilterPickerScreen } from "./ui/screens/filter-picker-screen";
 import { openTextInputScreen } from "./ui/screens/text-input-screen";
 import { openPagerScreen, type LongFormPagerContent, type LongFormSection } from "./ui/screens/pager-screen";
@@ -58,7 +59,6 @@ const AUTO_TITLE_MIN_USER_MESSAGES = 2;
 const AUTO_TITLE_DISABLED = process.env.PI_KIT_NO_AUTO_TITLE === "1";
 const LONGFORM_MIN_CHARS = 900;
 const LONGFORM_MAX_SECTIONS = 12;
-const LONGFORM_SECTION_MAX_CHARS = 1200;
 
 const pagerNotesByEntryId = new Map<string, Map<number, string>>();
 
@@ -433,64 +433,16 @@ function buildWizardFromLastAssistant(ctx: any): GuidedQuestionnaireInput | null
 }
 
 function splitLongFormSections(text: string): LongFormSection[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (!normalized) return [];
-
-  const headingChunks = normalized
-    .split(/\n(?=#+\s+)/g)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-
-  const sections: LongFormSection[] = [];
-
-  const pushSection = (title: string, body: string) => {
-    const cleanBody = body.trim();
-    if (!cleanBody) return;
-    sections.push({
-      title: clip(title.trim() || "Section", 64),
-      body: clip(cleanBody, LONGFORM_SECTION_MAX_CHARS),
-    });
-  };
-
-  const candidateBlocks = headingChunks.length > 1 ? headingChunks : normalized.split(/\n\n+/g);
-
-  for (let idx = 0; idx < candidateBlocks.length; idx++) {
-    const block = candidateBlocks[idx].trim();
-    if (!block) continue;
-
-    const lines = block.split("\n");
-    const first = lines[0]?.trim() || "";
-    const isHeading = /^#+\s+/.test(first);
-
-    if (isHeading) {
-      const title = first.replace(/^#+\s+/, "").trim() || `Section ${idx + 1}`;
-      pushSection(title, block);
-    } else {
-      const sentence = block.replace(/\s+/g, " ").match(/^[^.!?\n]{4,80}[.!?]?/)?.[0]?.trim() || `Section ${idx + 1}`;
-      pushSection(sentence, block);
-    }
-
-    if (sections.length >= LONGFORM_MAX_SECTIONS) break;
-  }
-
-  if (sections.length <= 1) {
-    const paragraphs = normalized.split(/\n\n+/g).map((p) => p.trim()).filter(Boolean);
-    const chunked: LongFormSection[] = [];
-    let cursor = 0;
-    while (cursor < paragraphs.length && chunked.length < LONGFORM_MAX_SECTIONS) {
-      let body = "";
-      while (cursor < paragraphs.length && `${body}\n\n${paragraphs[cursor]}`.trim().length <= LONGFORM_SECTION_MAX_CHARS) {
-        body = `${body}\n\n${paragraphs[cursor]}`.trim();
-        cursor += 1;
-      }
-      const title = body.match(/^[^.!?\n]{4,70}/)?.[0]?.trim() || `Section ${chunked.length + 1}`;
-      if (body) chunked.push({ title, body });
-      if (!body) cursor += 1;
-    }
-    return chunked.length > 0 ? chunked : sections;
-  }
-
-  return sections;
+  return splitSections(text)
+    .slice(0, LONGFORM_MAX_SECTIONS)
+    .map((section) => ({
+      title: clip(section.title.replace(/\s+/g, " ").trim() || "Section", 64),
+      sectionTitle: section.sectionTitle
+        ? clip(section.sectionTitle.replace(/\s+/g, " ").trim(), 64)
+        : "",
+      body: section.body.trim(),
+    }))
+    .filter((section) => section.body.length > 0);
 }
 
 function getPagerNotes(sessionId: string, entryId: string): Map<number, string> {
@@ -513,7 +465,7 @@ function formatPagerFeedbackMessage(pager: LongFormPagerContent, notes: Map<numb
   pager.sections.forEach((section, idx) => {
     const note = notes.get(idx)?.trim();
     if (!note) return;
-    blocks.push(`## Section ${idx + 1}: ${section.title}\n${note}`);
+    blocks.push(`## ${section.title}\n${note}`);
   });
 
   if (blocks.length === 0) return null;

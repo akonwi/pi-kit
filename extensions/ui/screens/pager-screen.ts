@@ -4,6 +4,7 @@ import type { InteractionDockController, ScreenController } from "../shell";
 
 export type LongFormSection = {
   title: string;
+  sectionTitle?: string;
   body: string;
 };
 
@@ -140,7 +141,7 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
   loadCurrentNote();
   ctx.ui.setStatus(
     "pager",
-    ctx.ui.theme.fg("dim", "pager: Enter send • Esc close • clear editor to clear note • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll"),
+    ctx.ui.theme.fg("dim", "pager: Ctrl+Enter send • Esc close • clear editor to clear note • Ctrl+Shift+←/→ section • Ctrl+↑/↓ scroll"),
   );
 
   void ctx.ui.custom<void>(
@@ -174,10 +175,13 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
             })
             .join(" ");
 
+          const sectionTitle = sections[index]?.sectionTitle?.trim() || "";
+          const sectionTitleRows = sectionTitle ? [row(theme.fg("muted", theme.bold(sectionTitle)))] : [];
           const { bodyLines, availableRows, visibleBodyRows, maxScroll } = getPagerMetrics(inside);
           scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
 
-          const visibleBodyLines = bodyLines.slice(scrollOffset, scrollOffset + visibleBodyRows);
+          const bodyRowsAvailable = Math.max(0, visibleBodyRows - sectionTitleRows.length);
+          const visibleBodyLines = bodyLines.slice(scrollOffset, scrollOffset + bodyRowsAvailable);
           const firstVisibleLine = bodyLines.length === 0 ? 0 : scrollOffset + 1;
           const lastVisibleLine = bodyLines.length === 0
             ? 0
@@ -195,13 +199,14 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
           const headerGap = Math.max(2, inside - leftPlain.length - rightPlain.length);
           const headerRow = `${leftPart}${" ".repeat(headerGap)}${rightPart}`;
 
-          const hintRow = theme.fg("dim", "Enter send • Esc close • Ctrl+Shift+←/→ section • Ctrl+Shift+↑/↓ scroll");
+          const hintRow = theme.fg("dim", "Ctrl+Enter send • Esc close • Ctrl+Shift+←/→ section • Ctrl+↑/↓ scroll");
 
           const content = [
             `${bc("╭")}${bc("─".repeat(inside))}${bc("╮")}`,
             row(headerRow),
+            ...sectionTitleRows,
             ...visibleBodyLines.map((line) => row(` ${line}`)),
-            ...Array.from({ length: Math.max(0, visibleBodyRows - visibleBodyLines.length) }, () => row()),
+            ...Array.from({ length: Math.max(0, bodyRowsAvailable - visibleBodyLines.length) }, () => row()),
             row(hintRow),
             `${bc("╰")}${bc("─".repeat(inside))}${bc("╯")}`,
           ];
@@ -256,7 +261,7 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
         close(true);
         return { consume: true };
       }
-      if (matchesKey(data, Key.enter) || matchesKey(data, Key.ctrl("s"))) {
+      if (matchesKey(data, Key.ctrl("enter")) || matchesKey(data, Key.ctrl("return")) || matchesKey(data, Key.ctrl("s"))) {
         submitSectionNotes();
         return { consume: true };
       }
@@ -268,22 +273,22 @@ export function openPagerScreen(options: PagerScreenOptions): ScreenController {
         if (index > 0) moveToSection(index - 1, "prev");
         return { consume: true };
       }
-      if (matchesKey(data, Key.ctrl("shift+up"))) {
+      if (matchesKey(data, Key.ctrl("up")) || matchesKey(data, Key.ctrl("shift+up"))) {
         if (scrollOffset > 0) scrollOffset -= 1;
         requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, Key.ctrl("shift+down"))) {
+      if (matchesKey(data, Key.ctrl("down")) || matchesKey(data, Key.ctrl("shift+down"))) {
         if (scrollOffset < maxScroll) scrollOffset += 1;
         requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, Key.ctrl("shift+home"))) {
+      if (matchesKey(data, Key.ctrl("home")) || matchesKey(data, Key.ctrl("shift+home"))) {
         scrollOffset = 0;
         requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, Key.ctrl("shift+end"))) {
+      if (matchesKey(data, Key.ctrl("end")) || matchesKey(data, Key.ctrl("shift+end"))) {
         scrollOffset = maxScroll;
         requestRender();
         return { consume: true };
