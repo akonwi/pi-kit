@@ -6,61 +6,44 @@
 - **Phase 2: Modular extraction** ✅ COMPLETE
 - **Phase 3: Revert custom UI overlay** ✅ COMPLETE
 - **Phase 4: Reimplement and refine** ✅ COMPLETE
-- **Phase 5: Polish** — Not started
+- **Phase 5: Polish** ✅ COMPLETE
 
 ---
 
-## Phase 4 Complete (2024-04-02)
+## Commands (smoke tested ✅)
 
-### Thread references with `@@` prefix ✅
+| Command | Module | Description |
+|---------|--------|-------------|
+| `/threads` | session-commands.ts | Manage threads — rename or delete |
+| `/switch` | session-commands.ts | Switch to another thread/session |
+| `/files:ignore` | ignore.ts | Add path to .pi-ignore |
+| `/files:unignore` | ignore.ts | Remove path from .pi-ignore |
+| `/pager` | pager/index.ts | Page through last response with per-section notes |
+| `/handoff` | handoff.ts | Create child thread with compact context |
+| `/wizard` | wizard.ts | Run guided questions from last assistant message |
+| `/bells` | notifications.ts | Toggle bell notifications |
+| `/speech` | notifications.ts | Toggle speech notifications |
 
-- `ThreadAwareEditor` wraps Pi's autocomplete provider
-- `@@` triggers thread picker during typing (like `@` for files)
-- Thread fuzzy search by ID, name, cwd, first message
-- `@@id` expands to thread context on input
-- `/threads` command browses threads and inserts reference
-
-### Pager with per-section notes ✅
-
-- Uses `ctx.ui.custom()` with embedded `Editor` for notes
-- Markdown rendering with `Markdown` component from pi-tui
-- Section-by-section navigation (`h`/`l`)
-- Note-taking per section (`n` to edit)
-- `Ctrl+Enter` submits notes as structured feedback
-- Visual indicators: `○` empty, `●` has note, `◆` current
-
-### Consolidated commands ✅
-
-- Removed duplicate `/threads` command (was in both files)
-- `/threads` now lives in `thread-references.ts`
-- `/switch` and `/threads:manage` in `session-commands.ts`
-- `/files:ignore` and `/files:unignore` in `thread-references.ts`
-
----
-
-## Phase 5: Polish — Not started
-
-- Verify all commands work correctly
-- Clean up unused code paths
-- Update documentation
-- Consider adding tests for critical paths
+**Also verified:**
+- `@@` thread picker during typing
+- `@@id` expansion to thread context on submit
 
 ---
 
 ## Extension Modules
 
-| File | Commands/Features |
-|------|-------------------|
-| `pi-kit.ts` | Orchestrator, loads all modules |
-| `thread-editor.ts` | `ThreadAwareEditor`, `ThreadAwareAutocompleteProvider` |
+| File | Responsibility |
+|------|----------------|
+| `pi-kit.ts` | Orchestrator — loads all modules |
+| `thread-editor.ts` | `ThreadAwareEditor`, `@@` autocomplete provider |
 | `thread-editor-extension.ts` | Installs custom editor at session start |
-| `thread-references.ts` | `@@id` expansion |
+| `thread-references.ts` | `@@id` expansion to thread context |
+| `session-commands.ts` | `/threads`, `/switch` |
 | `ignore.ts` | `/files:ignore`, `/files:unignore` |
-| `session-commands.ts` | `/threads` (manage), `/switch` |
-| `pager/index.ts` | `/pager` with notes |
-| `notifications.ts` | `/bells`, `/speech` |
-| `session-naming.ts` | Auto session titles |
-| `handoff.ts` | `/handoff` for child threads |
+| `pager/index.ts` | `/pager` with per-section notes |
+| `notifications.ts` | `/bells`, `/speech`, notification config |
+| `session-naming.ts` | Auto session title generation |
+| `handoff.ts` | `/handoff` child thread creation |
 | `wizard.ts` | `guided_questions` tool, `/wizard` |
 | `footer.ts` | Custom status bar |
 | `protected-paths.ts` | Protected paths guard |
@@ -68,7 +51,7 @@
 
 ---
 
-## Config files
+## Config
 
-- `~/.pi/agent/settings.json` — global Pi settings (controls which extensions are loaded)
-- `~/.pi/agent/kit.json` — pi-kit specific settings (bells, speech config)
+- `~/.pi/agent/settings.json` — Pi settings (which extensions load)
+- `~/.pi/agent/kit.json` — pi-kit settings (bells, speech)
