@@ -15,7 +15,6 @@ import threadEditorExtension from "./thread-editor-extension";
 import ignoreExtension from "./ignore";
 import threadReferencesExtension from "./thread-references";
 import protectedPathsExtension from "./protected-paths";
-import subagentExtension from "./subagent/index";
 import claudeCommandsExtension from "./claude-commands";
 
 export default function piKitExtension(pi: ExtensionAPI): void {
@@ -30,6 +29,5 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   ignoreExtension(pi);
   threadReferencesExtension(pi);
   protectedPathsExtension(pi);
-  subagentExtension(pi);
   claudeCommandsExtension(pi);
 }
