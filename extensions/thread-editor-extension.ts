@@ -1,14 +1,14 @@
 /**
  * Thread-aware editor extension.
  *
- * Installs a custom editor that adds `@@` thread completion
- * to Pi's native `@` file completion and `/` command completion.
+ * Installs a custom editor with @@ thread completion
+ * alongside native @ file and / command completion.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { ThreadAwareEditor, ThreadAwareAutocompleteProvider } from "./thread-editor";
+import { ThreadAwareAutocompleteProvider, createThreadAwareEditor } from "./thread-editor";
 
-// Global provider so we can invalidate the thread index when needed
+// Global provider for thread index invalidation
 let threadAutocompleteProvider: ThreadAwareAutocompleteProvider | null = null;
 
 export function invalidateThreadEditorIndex(): void {
@@ -19,36 +19,33 @@ export default function threadEditorExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
 
-    // Get the current session path for thread lookup
-    const currentSessionPath = ctx.sessionManager?.getSessionFile?.();
+    // Get slash commands from Pi
+    const commands = pi.getCommands();
+    const slashCommands = commands.map((c) => ({
+      name: c.name,
+      description: c.description,
+    }));
 
-    // Create the thread-aware autocomplete provider
-    const threadProvider = new ThreadAwareAutocompleteProvider(
-      null, // Base provider will be set by Pi
-      currentSessionPath,
+    // Create thread-aware autocomplete provider with slash commands
+    const provider = new ThreadAwareAutocompleteProvider(
+      slashCommands,
+      ctx.cwd,
+      null, // fdPath - let CombinedAutocompleteProvider handle it
     );
-    threadAutocompleteProvider = threadProvider;
+    threadAutocompleteProvider = provider;
 
-    // Install our custom editor that uses the thread-aware autocomplete
+    // Install custom editor with our provider
     ctx.ui.setEditorComponent((tui: any, theme: any, keybindings: any) => {
-      const editor = new ThreadAwareEditor(tui, theme, keybindings, threadProvider, {
-        paddingX: 1, // Match Pi's default
-        autocompleteMaxVisible: 8,
-      });
+      const editor = createThreadAwareEditor(tui, theme, keybindings, slashCommands, ctx.cwd);
       return editor;
     });
   });
 
   pi.on("session_switch", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
-
-    // Update the thread provider with the new session path
-    const currentSessionPath = ctx.sessionManager?.getSessionFile?.();
-    threadAutocompleteProvider?.setCurrentSessionPath(currentSessionPath);
+    // Invalidate thread index on session switch
     threadAutocompleteProvider?.invalidateThreadIndex();
   });
 
-  // Invalidate thread index after thread-related operations
   pi.events.on("thread-reference:index-refresh", () => {
     threadAutocompleteProvider?.invalidateThreadIndex();
   });
