@@ -23,6 +23,7 @@ import pagerExtension from "./pager";
 import sessionCommandsExtension from "./session-commands";
 import footerExtension from "./footer";
 import threadEditorExtension from "./thread-editor-extension";
+import ignoreExtension from "./ignore";
 
 // --- Extension factory ---
 
@@ -38,4 +39,5 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   sessionCommandsExtension(pi);
   footerExtension(pi);
   threadEditorExtension(pi);
+  ignoreExtension(pi);
 }

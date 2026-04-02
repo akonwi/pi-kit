@@ -1,7 +1,7 @@
 /**
  * Session commands extension — thread/session management.
  *
- * Provides /threads, /switch, and /threads:manage commands
+ * Provides /switch and /threads:manage commands
  * for navigation and management of Pi sessions.
  * Uses Pi's native UI primitives for dialogs.
  */
@@ -48,30 +48,6 @@ async function pickSession(
 // --- Extension factory ---
 
 export default function sessionCommandsExtension(pi: ExtensionAPI): void {
-  pi.registerCommand("threads", {
-    description: "Browse threads and insert a thread reference (@@id)",
-    handler: async (args, ctx) => {
-      const query = String(args || "").trim();
-      const currentPath = ctx.sessionManager.getSessionFile();
-      const sessions = await listSessions(currentPath, false);
-
-      // Filter by query if provided
-      const filtered = query
-        ? sessions.filter((s) =>
-            s.id.toLowerCase().includes(query.toLowerCase()) ||
-            (s.name || "").toLowerCase().includes(query.toLowerCase()) ||
-            s.cwd.toLowerCase().includes(query.toLowerCase()),
-          )
-        : sessions;
-
-      const chosen = await pickSession(ctx, "Insert thread reference", filtered);
-      if (!chosen) return;
-
-      const token = `@@${chosen.id.slice(0, 8)}`;
-      ctx.ui.pasteToEditor(`${token} `);
-      ctx.ui.notify(`Inserted ${token}`, "info");
-    },
-  });
 
   pi.registerCommand("switch", {
     description: "Switch to another thread/session",
@@ -98,8 +74,8 @@ export default function sessionCommandsExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("threads:manage", {
-    description: "Rename or delete a thread",
+  pi.registerCommand("threads", {
+    description: "Manage threads - rename or delete",
     handler: async (args, ctx) => {
       const query = String(args || "").trim();
       const currentPath = ctx.sessionManager.getSessionFile();
