@@ -139,14 +139,14 @@ class PagerComponent implements Focusable {
       return;
     }
 
-    // Page up
-    if (matchesKey(data, "pageup") || matchesKey(data, "b")) {
+    // Page up (previous page)
+    if (matchesKey(data, "pageup") || matchesKey(data, "b") || matchesKey(data, "h")) {
       this.scrollOffset = Math.max(0, this.scrollOffset - this.viewportHeight);
       return;
     }
 
-    // Page down
-    if (matchesKey(data, "pagedown") || matchesKey(data, "f")) {
+    // Page down (next page)
+    if (matchesKey(data, "pagedown") || matchesKey(data, "f") || matchesKey(data, "l")) {
       this.scrollOffset = Math.min(this.renderedLines.length - this.viewportHeight, this.scrollOffset + this.viewportHeight);
       return;
     }
@@ -174,7 +174,7 @@ class PagerComponent implements Focusable {
     }
 
     // Show help
-    if (matchesKey(data, "h") || matchesKey(data, "?")) {
+    if (matchesKey(data, "?")) {
       this.showHelp = !this.showHelp;
       return;
     }
@@ -227,7 +227,7 @@ class PagerComponent implements Focusable {
 
       // Footer with controls
       const position = `${this.scrollOffset + 1}/${this.renderedLines.length}`;
-      const controls = "↑↓/jk scroll • f/b page • g/G top/bot • 1-9 section • h help • q quit";
+      const controls = "↑↓/jk scroll • h/l prev/next page • g/G top/bot • 1-9 section • ? help • q quit";
       const controlsLine = th.fg("dim", controls);
       const controlsPad = Math.max(0, innerWidth - visibleWidth(controlsLine) - visibleWidth(position) - 1);
       lines.push(`${border}${controlsLine}${" ".repeat(controlsPad)} ${th.fg("dim", position)}${border}`);
@@ -238,14 +238,15 @@ class PagerComponent implements Focusable {
         " Navigation:",
         "  ↑/k     Scroll up one line",
         "  ↓/j     Scroll down one line",
-        "  b       Page up",
-        "  f       Page down",
+        "  h       Previous page",
+        "  l       Next page",
+        "  b/f     Page up/down (alternate)",
         "  g       Go to top",
         "  G       Go to bottom",
         "  1-9     Jump to section",
         "",
         " Actions:",
-        "  h/?     Toggle this help",
+        "  ?       Toggle this help",
         "  q/Esc   Close pager",
         "  Enter   Close pager",
         "",
