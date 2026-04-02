@@ -102,7 +102,8 @@ class PagerComponent implements Focusable {
   private updateContent(): void {
     const section = this.sections[this.currentIndex];
     if (section) {
-      this.markdown.setText(`## ${section.title}\n\n${section.body}`);
+      // Section body already contains content, don't duplicate title
+      this.markdown.setText(section.body);
       this.scrollOffset = 0;
     }
   }
@@ -161,20 +162,6 @@ class PagerComponent implements Focusable {
         // Last section - close pager
         this.done(undefined);
       }
-      return;
-    }
-
-    // Jump to first section
-    if (matchesKey(data, "g")) {
-      this.currentIndex = 0;
-      this.updateContent();
-      return;
-    }
-
-    // Jump to last section
-    if (matchesKey(data, "G")) {
-      this.currentIndex = this.sections.length - 1;
-      this.updateContent();
       return;
     }
 
@@ -237,7 +224,7 @@ class PagerComponent implements Focusable {
       const moreBelow = this.scrollOffset < this.renderedLines.length - this.viewportHeight;
       const moreAbove = this.scrollOffset > 0;
       const scrollHint = (moreAbove || moreBelow) ? `(${moreAbove ? "↑" : ""}${moreBelow ? "↓" : ""} scroll)` : "";
-      const controls = `h/l prev/next • ↑↓ scroll • g/G first/last • 1-9 jump • ? help • q quit`;
+      const controls = `h/l prev/next • ↑↓ scroll • 1-9 jump • ? help • q quit`;
       const controlsLine = th.fg("dim", controls);
       const controlsPad = Math.max(0, innerWidth - visibleWidth(controlsLine) - visibleWidth(scrollHint) - 1);
       lines.push(`${border}${controlsLine}${" ".repeat(controlsPad)}${scrollHint ? th.fg("dim", scrollHint) + border : " " + border}`);
@@ -252,8 +239,6 @@ class PagerComponent implements Focusable {
         "  ↓/j     Scroll down one line",
         "  b       Page up within section",
         "  f       Page down within section",
-        "  g       First section",
-        "  G       Last section",
         "  1-9     Jump to section N",
         "",
         " Actions:",
