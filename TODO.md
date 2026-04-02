@@ -97,20 +97,38 @@ Use Pi's native UI primitives:
 4. **Simplify pager to use `ctx.ui.custom()` or `ctx.ui.editor()`**
 5. **Simplify wizard to use `ctx.ui.custom()` or native dialogs**
 
-### Files to delete after migration
+## Phase 4: Reimplement and refine
 
-```
-extensions/ui/input-surfaces/text-composer.ts
-extensions/ui/input-surfaces/wizard-input.ts
-extensions/ui/picker-overlay.ts
-extensions/ui/screens/filter-picker-screen.ts
-extensions/ui/screens/pager-screen.ts
-extensions/ui/screens/text-input-screen.ts
-extensions/ui/screens/thread-screen.ts
-extensions/ui/screens/wizard-screen.ts
-extensions/ui/shell.ts
-extensions/ui/thread-reference-shell.ts
-```
+### Thread references with `@@` prefix
+
+The extension previously used `[[thread:id]]` syntax for thread references. Reimplement with `@@` prefix to match Pi's standard syntax:
+
+- Files, paths: `@path/to/file` or `@file:123-456` (line ranges)
+- Threads: `@@thread-id` or `@@thread-id:summary`
+
+Update `thread-references.ts` to:
+- Parse `@@` prefix instead of `[[thread:`
+- Expand thread references in user input
+- Keep file/folder ignore support (`.pi-ignore`)
+
+### Pager UX improvement
+
+Current implementation uses `ctx.ui.editor()` which loses:
+- Markdown rendering
+- Section navigation
+- Per-section note-taking
+- Proper paging controls
+
+Options:
+1. Use `ctx.ui.custom()` with a custom pager component
+2. Stream content to a temp file and open with `$PAGER`
+3. Simplify to a markdown file that can be opened in the user's editor
+
+### Theme removal
+
+Remove `themes/akonwi-dark.json` - theme customization is out of scope for this extension.
+
+---
 
 ## Recent Changes
 

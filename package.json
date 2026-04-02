@@ -1,13 +1,12 @@
 {
   "name": "@akonwi/pi-kit",
   "version": "0.3.0",
-  "description": "Pi customization pack (Amp/OpenCode-like UX, thread tooling, alerts, and Ard subagent support).",
+  "description": "Pi customization pack (thread tooling, handoff, pager, guided questions, and subagent support).",
   "keywords": ["pi-package"],
   "license": "MIT",
   "files": [
     "extensions",
     "prompts",
-    "themes",
     "agents",
     "README.md"
   ],
@@ -19,8 +18,7 @@
       "./extensions/subagent/index.ts",
       "./extensions/claude-commands.ts"
     ],
-    "prompts": ["./prompts"],
-    "themes": ["./themes"]
+    "prompts": ["./prompts"]
   },
   "dependencies": {
     "ignore": "^7.0.5"
