@@ -9,6 +9,7 @@
  * - pager: /pager command for long responses
  * - session-commands: /threads, /switch, /threads:manage
  * - footer: custom status bar
+ * - thread-editor: @@ thread completion in editor
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -21,6 +22,7 @@ import wizardExtension from "./wizard";
 import pagerExtension from "./pager";
 import sessionCommandsExtension from "./session-commands";
 import footerExtension from "./footer";
+import threadEditorExtension from "./thread-editor-extension";
 
 // --- Extension factory ---
 
@@ -35,4 +37,5 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   pagerExtension(pi);
   sessionCommandsExtension(pi);
   footerExtension(pi);
+  threadEditorExtension(pi);
 }

@@ -1,10 +1,16 @@
+/**
+ * Thread references extension — `@@id` syntax for thread context.
+ *
+ * Provides:
+ * - `/threads` command to browse and insert thread references
+ * - `@@id` expansion to thread context in user input
+ * - `/files:ignore` and `/files:unignore` for .pi-ignore management
+ */
+
 import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { scanFiles as scanIndexedFiles } from "./indexing/scan-files";
-export { scoreMatch } from "./indexing/score";
 
 export type SessionInfoLite = {
   path: string;
@@ -19,86 +25,45 @@ const MAX_REFERENCES_PER_PROMPT = 3;
 const MAX_BLOCK_CHARS = 3500;
 const MAX_LINE_CHARS = 280;
 const MAX_LINES = 12;
-const BADGE_DURATION_MS = 3000;
-export const PICKER_MAX_ITEMS = 8;
-const PICKER_MAX_FILES = 4000;
-const DEFAULT_FILE_SCAN_EXCLUDES = [".git", "node_modules", ".pi", ".agents", "dist", "build"];
 const FILE_PICKER_IGNORE_FILE = ".pi-ignore";
 const LEGACY_FILE_PICKER_IGNORE_FILE = ".pi-files-ignore";
-export const FALLBACK_BUILT_IN_COMMANDS = [
-  "login",
-  "logout",
-  "model",
-  "scoped-models",
-  "settings",
-  "resume",
-  "new",
-  "name",
-  "session",
-  "tree",
-  "fork",
-  "compact",
-  "copy",
-  "export",
-  "share",
-  "reload",
-  "hotkeys",
-  "changelog",
-  "quit",
-  "exit",
-];
+const DEFAULT_FILE_SCAN_EXCLUDES = [".git", "node_modules", ".pi", ".agents", "dist", "build"];
 
-let transientBadgeText: string | undefined;
-let transientBadgeUntil = 0;
-let requestEditorRender: (() => void) | undefined;
-
-export function setThreadReferenceRenderRequest(next: (() => void) | undefined): void {
-  requestEditorRender = next;
-}
-
-export function requestThreadReferenceRender(): void {
-  requestEditorRender?.();
-}
-
-export function showTransientBadge(text: string): void {
-  transientBadgeText = text;
-  transientBadgeUntil = Date.now() + BADGE_DURATION_MS;
-  requestEditorRender?.();
-
-  setTimeout(() => {
-    if (Date.now() >= transientBadgeUntil) {
-      requestEditorRender?.();
-    }
-  }, BADGE_DURATION_MS + 20);
-}
-
-export function getTransientBadge(): string | undefined {
-  if (!transientBadgeText) return undefined;
-  if (Date.now() >= transientBadgeUntil) return undefined;
-  return transientBadgeText;
-}
+// --- Helpers ---
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
-export async function discoverBuiltInCommands(): Promise<string[]> {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkgJsonPath = require.resolve("@mariozechner/pi-coding-agent/package.json");
-    const pkgRoot = path.dirname(pkgJsonPath);
-    const readmePath = path.join(pkgRoot, "README.md");
-    const readme = await readFile(readmePath, "utf8");
+function messageText(msg: AgentMessage): string {
+  const content: unknown = (msg as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
 
-    const extracted = [...readme.matchAll(/`\/([a-z][a-z0-9:-]*)[^`]*`/gi)]
-      .map((m) => (m[1] || "").trim().toLowerCase())
-      .filter(Boolean);
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const b = block as Record<string, unknown>;
+      if (b.type === "text" && typeof b.text === "string") return b.text;
+      if (b.type === "thinking" && typeof b.thinking === "string") return "";
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
 
-    const merged = Array.from(new Set([...FALLBACK_BUILT_IN_COMMANDS, ...extracted]));
-    return merged;
-  } catch {
-    return [...FALLBACK_BUILT_IN_COMMANDS];
-  }
+function roleLabel(role: string): string {
+  if (role === "user") return "User";
+  if (role === "assistant") return "Assistant";
+  if (role === "toolResult") return "Tool";
+  if (role === "bashExecution") return "Bash";
+  return "Message";
+}
+
+function toDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  return new Date(String(value));
 }
 
 function normalizeRelativePath(value: string): string {
@@ -219,10 +184,6 @@ async function removeIgnoreEntryByPath(baseDir: string, targetPath: string): Pro
   }
 
   const candidates = Array.from(new Set([
-    ...searchDirs.flatMap((dir) => {
-      const relToDir = normalizeRelativePath(path.relative(dir, targetPath));
-      return [relToDir, `${relToDir}/`].filter(Boolean);
-    }),
     normalizeRelativePath(path.relative(baseDir, targetPath)),
     `${normalizeRelativePath(path.relative(baseDir, targetPath))}/`,
   ].filter(Boolean)));
@@ -241,91 +202,7 @@ async function removeIgnoreEntryByPath(baseDir: string, targetPath: string): Pro
   return { removed: false };
 }
 
-async function scanNamedFiles(cwd: string, fileName: string): Promise<string[]> {
-  const found: string[] = [];
-
-  async function walk(dir: string): Promise<void> {
-    let entries: Awaited<ReturnType<typeof readdir>>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (DEFAULT_FILE_SCAN_EXCLUDES.includes(entry.name)) continue;
-        await walk(full);
-        continue;
-      }
-      if (entry.isFile() && entry.name === fileName) {
-        found.push(full);
-      }
-    }
-  }
-
-  await walk(cwd);
-  return found.sort((a, b) => a.localeCompare(b));
-}
-
-async function scanIgnoreFiles(cwd: string): Promise<string[]> {
-  return scanNamedFiles(cwd, FILE_PICKER_IGNORE_FILE);
-}
-
-export async function scanLegacyIgnoreFiles(cwd: string): Promise<string[]> {
-  return scanNamedFiles(cwd, LEGACY_FILE_PICKER_IGNORE_FILE);
-}
-
-async function scanPathPickerItems(cwd: string): Promise<Array<{ label: string; value: string }>> {
-  const result = await scanIndexedFiles(cwd);
-
-  const dirItems = result.dirs
-    .sort((a, b) => a.localeCompare(b))
-    .map((value) => ({ label: `dir  ${value}`, value }));
-  const fileItems = result.files
-    .sort((a, b) => a.localeCompare(b))
-    .map((value) => ({ label: `file ${value}`, value }));
-
-  return [...dirItems, ...fileItems].slice(0, PICKER_MAX_FILES);
-}
-
-export async function scanFiles(cwd: string): Promise<string[]> {
-  const result = await scanIndexedFiles(cwd);
-  return [...result.dirs, ...result.files].slice(0, PICKER_MAX_FILES);
-}
-
-export function messageText(msg: AgentMessage): string {
-  const content: unknown = (msg as { content?: unknown }).content;
-
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") return "";
-      const b = block as Record<string, unknown>;
-      if (b.type === "text" && typeof b.text === "string") return b.text;
-      if (b.type === "thinking" && typeof b.thinking === "string") return "";
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-}
-
-function roleLabel(role: string): string {
-  if (role === "user") return "User";
-  if (role === "assistant") return "Assistant";
-  if (role === "toolResult") return "Tool";
-  if (role === "bashExecution") return "Bash";
-  return "Message";
-}
-
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  return new Date(String(value));
-}
+// --- Session listing ---
 
 export async function listSessions(currentSessionPath?: string, includeCurrent = false): Promise<SessionInfoLite[]> {
   const all = await SessionManager.listAll();
@@ -358,59 +235,6 @@ function matchesQuery(s: SessionInfoLite, query: string): boolean {
   );
 }
 
-function resolveToken(token: string, sessions: SessionInfoLite[]): { session?: SessionInfoLite; error?: string } {
-  const key = token.trim().toLowerCase();
-  if (!key) return { error: "empty reference" };
-
-  const byIdPrefix = sessions.filter((s) => s.id.toLowerCase().startsWith(key));
-  if (byIdPrefix.length === 1) return { session: byIdPrefix[0] };
-  if (byIdPrefix.length > 1) return { error: `ambiguous id prefix '${token}'` };
-
-  const byNameContains = sessions.filter((s) =>
-    `${s.name || ""} ${s.firstMessage || ""}`.toLowerCase().includes(key),
-  );
-  if (byNameContains.length === 1) return { session: byNameContains[0] };
-  if (byNameContains.length > 1) return { error: `ambiguous name match '${token}'` };
-
-  return { error: `no thread found for '${token}'` };
-}
-
-function buildReferenceBlock(session: SessionInfoLite): string {
-  try {
-    const sm = SessionManager.open(session.path);
-    const context = sm.buildSessionContext();
-
-    const messages = context.messages
-      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult")
-      .map((m) => {
-        const text = messageText(m).replace(/\s+/g, " ").trim();
-        return {
-          role: roleLabel(m.role),
-          text: clip(text, MAX_LINE_CHARS),
-        };
-      })
-      .filter((m) => m.text.length > 0);
-
-    const tail = messages.slice(-MAX_LINES);
-
-    const header = [
-      `[Thread Reference]`,
-      `id: ${session.id}`,
-      `title: ${threadTitle(session)}`,
-      `cwd: ${session.cwd || "(unknown)"}`,
-      `updated: ${session.modified.toISOString()}`,
-      `---`,
-    ];
-
-    const body = tail.map((m) => `${m.role}: ${m.text}`);
-    const block = [...header, ...body].join("\n");
-    return clip(block, MAX_BLOCK_CHARS);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    return `[Thread Reference]\nid: ${session.id}\nerror: failed to read thread (${msg})`;
-  }
-}
-
 function formatTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return "just now";
@@ -438,261 +262,220 @@ export function formatSessionOptionLite(s: SessionInfoLite): { label: string; de
   };
 }
 
-function optionLabel(s: SessionInfoLite): string {
-  const option = formatSessionOptionLite(s);
-  return `${option.label}  ·  ${option.description}`;
+// --- Thread reference resolution ---
+
+function resolveThreadToken(token: string, sessions: SessionInfoLite[]): { session?: SessionInfoLite; error?: string } {
+  const key = token.trim().toLowerCase();
+  if (!key) return { error: "empty thread reference" };
+
+  // Try exact ID match first
+  const byExactId = sessions.find((s) => s.id.toLowerCase() === key);
+  if (byExactId) return { session: byExactId };
+
+  // Try ID prefix match
+  const byIdPrefix = sessions.filter((s) => s.id.toLowerCase().startsWith(key));
+  if (byIdPrefix.length === 1) return { session: byIdPrefix[0] };
+  if (byIdPrefix.length > 1) {
+    const ids = byIdPrefix.slice(0, 3).map((s) => s.id.slice(0, 8)).join(", ");
+    return { error: `ambiguous: ${ids}${byIdPrefix.length > 3 ? "..." : ""}` };
+  }
+
+  // Try name/content match
+  const byNameContains = sessions.filter((s) =>
+    `${s.name || ""} ${s.firstMessage || ""}`.toLowerCase().includes(key),
+  );
+  if (byNameContains.length === 1) return { session: byNameContains[0] };
+  if (byNameContains.length > 1) {
+    return { error: `ambiguous name match` };
+  }
+
+  return { error: `thread not found` };
 }
 
-async function pickSession(
-  sessions: SessionInfoLite[],
-  title: string,
-  ctx: { ui: { select: (title: string, options: string[]) => Promise<string | undefined> } },
-): Promise<SessionInfoLite | undefined> {
-  const top = sessions.slice(0, 40);
-  const options = top.map(optionLabel);
-  const selected = await ctx.ui.select(title, options);
-  if (!selected) return undefined;
-  const index = options.indexOf(selected);
-  if (index < 0) return undefined;
-  return top[index];
+function buildThreadContextBlock(session: SessionInfoLite): string {
+  try {
+    const sm = SessionManager.open(session.path);
+    const context = sm.buildSessionContext();
+
+    const messages = context.messages
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult")
+      .map((m) => {
+        const text = messageText(m).replace(/\s+/g, " ").trim();
+        return {
+          role: roleLabel(m.role),
+          text: clip(text, MAX_LINE_CHARS),
+        };
+      })
+      .filter((m) => m.text.length > 0);
+
+    const tail = messages.slice(-MAX_LINES);
+
+    const header = [
+      `[Thread Context]`,
+      `id: ${session.id}`,
+      `title: ${threadTitle(session)}`,
+      `cwd: ${session.cwd || "(unknown)"}`,
+      `updated: ${session.modified.toISOString()}`,
+      `---`,
+    ];
+
+    const body = tail.map((m) => `${m.role}: ${m.text}`);
+    return [...header, ...body].join("\n");
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return `[Thread Context]\nid: ${session.id}\nerror: ${msg}`;
+  }
 }
+
+// --- Extension ---
 
 export default function threadReferencesExtension(pi: ExtensionAPI) {
-  const choosePathToIgnore = async (ctx: any): Promise<string | null | undefined> => {
-    if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
-    const items = await scanPathPickerItems(ctx.cwd);
-    if (items.length === 0) return null;
-    const labels = items.slice(0, 4000).map((item) => item.label);
-    const selected = await ctx.ui.select("Ignore file or directory", labels);
-    if (!selected) return undefined;
-    return items.find((item) => item.label === selected)?.value;
-  };
+  // Thread picker for /threads command
+  pi.registerCommand("threads", {
+    description: "Browse threads and insert a thread reference",
+    handler: async (args, ctx) => {
+      const query = String(args || "").trim();
+      const currentPath = ctx.sessionManager.getSessionFile();
+      const sessions = await listSessions(currentPath, false);
 
-  const chooseIgnoreEntryToRemove = async (ctx: any): Promise<IgnoreEntryRecord | null | undefined> => {
-    if (!ctx.hasUI || typeof ctx.ui.select !== "function") return null;
-    const ignoreFiles = await scanIgnoreFiles(ctx.cwd);
-    const entries = (await Promise.all(ignoreFiles.map((ignoreFile) => listIgnoreEntriesInFile(ignoreFile))))
-      .flat()
-      .sort((a, b) => {
-        const fileCmp = a.ignoreFile.localeCompare(b.ignoreFile);
-        return fileCmp !== 0 ? fileCmp : a.entry.localeCompare(b.entry);
+      const filtered = query
+        ? sessions.filter((s) => matchesQuery(s, query))
+        : sessions;
+
+      if (filtered.length === 0) {
+        ctx.ui.notify("No threads found", "warning");
+        return;
+      }
+
+      const options = filtered.slice(0, 20).map((s) => {
+        const { label, description } = formatSessionOptionLite(s);
+        return `${label}  ·  ${description}`;
       });
-    if (entries.length === 0) return null;
 
-    const labels = entries.map((item) => {
-      const location = path.relative(ctx.cwd, item.ignoreFile) || FILE_PICKER_IGNORE_FILE;
-      return `${location}  ·  ${item.entry}`;
-    });
-    const selected = await ctx.ui.select("Unignore entry", labels);
-    if (!selected) return undefined;
-    const index = labels.indexOf(selected);
-    return index >= 0 ? entries[index] : undefined;
-  };
+      const choice = await ctx.ui.select("Select thread", options);
+      if (choice === undefined) return;
 
-  const refreshIndexes = async (
-    _ctx: any,
-    options?: { files?: boolean; threads?: boolean },
-  ): Promise<void> => {
-    pi.events.emit("thread-reference:index-refresh", options || { files: true, threads: true });
-    requestEditorRender?.();
-  };
+      const index = options.indexOf(choice);
+      if (index < 0) return;
 
-  const fileIgnoreHandler = async (args: string | undefined, ctx: any) => {
-    let raw = (args || "").trim();
-    if (!raw) {
-      const picked = await choosePathToIgnore(ctx);
-      if (picked === undefined) return;
-      raw = picked || "";
-    }
-    if (!raw && ctx.hasUI && typeof ctx.ui.input === "function") {
-      raw = String(await ctx.ui.input("Ignore file or directory", "") || "").trim();
-    }
+      const chosen = filtered[index];
+      const token = `@@${chosen.id.slice(0, 8)}`;
 
-    if (!raw) {
-      ctx.ui.notify("Usage: /files:ignore <path>", "warning");
-      return;
-    }
-
-    const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
-    const absolute = path.resolve(ctx.cwd, cleaned);
-
-    if (!isWithinDir(absolute, ctx.cwd)) {
-      ctx.ui.notify("Path must be inside the current session directory", "warning");
-      return;
-    }
-
-    let info: Awaited<ReturnType<typeof stat>>;
-    try {
-      info = await stat(absolute);
-    } catch {
-      ctx.ui.notify(`Path not found: ${cleaned}`, "warning");
-      return;
-    }
-
-    if (!info.isFile() && !info.isDirectory()) {
-      ctx.ui.notify("Only files and directories can be ignored", "warning");
-      return;
-    }
-
-    const result = await appendIgnoreEntry(ctx.cwd, absolute, info.isDirectory());
-    await refreshIndexes(ctx, { files: true });
-
-    if (result.duplicate) {
-      ctx.ui.notify(`Already ignored in ${path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE}`, "info");
-      return;
-    }
-
-    const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
-    const status = result.created ? "Created" : "Updated";
-    ctx.ui.notify(`${status} ${location} with ${result.entry}`, "info");
-    showTransientBadge("FILES IGNORED");
-  };
-
-  const fileUnignoreHandler = async (args: string | undefined, ctx: any) => {
-    let raw = (args || "").trim();
-
-    if (!raw) {
-      const chosen = await chooseIgnoreEntryToRemove(ctx);
-      if (chosen === undefined) return;
-      if (chosen === null) {
-        ctx.ui.notify("No ignore entries found", "warning");
-        return;
-      }
-
-      const removed = await removeIgnoreEntryFromFile(chosen.ignoreFile, chosen.entry);
-      if (!removed) {
-        ctx.ui.notify("Ignore entry was not found", "warning");
-        return;
-      }
-
-      await refreshIndexes(ctx, { files: true });
-      const location = path.relative(ctx.cwd, chosen.ignoreFile) || FILE_PICKER_IGNORE_FILE;
-      ctx.ui.notify(`Removed ${chosen.entry} from ${location}`, "info");
-      showTransientBadge("FILES UNIGNORED");
-      return;
-    }
-
-    const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
-    const absolute = path.resolve(ctx.cwd, cleaned);
-
-    if (!isWithinDir(absolute, ctx.cwd)) {
-      ctx.ui.notify("Path must be inside the current session directory", "warning");
-      return;
-    }
-
-    const result = await removeIgnoreEntryByPath(ctx.cwd, absolute);
-    if (!result.removed || !result.ignoreFile || !result.entry) {
-      ctx.ui.notify(`No ignore entry found for ${cleaned}`, "warning");
-      return;
-    }
-
-    await refreshIndexes(ctx, { files: true });
-    const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
-    ctx.ui.notify(`Removed ${result.entry} from ${location}`, "info");
-    showTransientBadge("FILES UNIGNORED");
-  };
-
-  pi.registerCommand("files:ignore", {
-    description: "Add a file or directory to the nearest .pi-files-ignore",
-    handler: fileIgnoreHandler,
+      // Insert the thread reference at cursor
+      ctx.ui.pasteToEditor(`${token} `);
+      ctx.ui.notify(`Inserted ${token}`, "info");
+    },
   });
 
-  pi.registerCommand("files:unignore", {
-    description: "Remove a file or directory from .pi-files-ignore",
-    handler: fileUnignoreHandler,
-  });
-
+  // Input handler: expand @@id references
   pi.on("input", async (event, ctx) => {
     let transformed = event.text;
     const notes: string[] = [];
-    let hadThreadAction = false;
 
-    // @@query -> interactive thread picker, replaced with [[thread:<id>]]
-    const atMarkers = [...transformed.matchAll(/(^|\s)@@([\w.-]*)/g)];
-    if (atMarkers.length > 0) {
-      if (!ctx.hasUI) {
-        notes.push("Skipped @@ thread references: UI not available in this mode.");
-      } else {
-        const currentSessionPath = ctx.sessionManager.getSessionFile();
-        const sessions = await listSessions(currentSessionPath);
-        const limitedMarkers = atMarkers.slice(0, MAX_REFERENCES_PER_PROMPT);
-
-        for (const match of limitedMarkers) {
-          const prefix = match[1] || "";
-          const query = (match[2] || "").trim();
-          const candidates = sessions.filter((s) => (query ? matchesQuery(s, query) : true));
-
-          if (candidates.length === 0) {
-            notes.push(`Skipped @@${query}: no matching threads`);
-            continue;
-          }
-
-          let chosen: SessionInfoLite | undefined;
-          if (candidates.length === 1) {
-            chosen = candidates[0];
-          } else {
-            chosen = await pickSession(candidates, `Select thread for @@${query || ""}`, ctx);
-          }
-
-          if (!chosen) {
-            notes.push(`Skipped @@${query}: selection cancelled`);
-            continue;
-          }
-
-          const marker = `${prefix}@@${query}`;
-          const replacement = `${prefix}[[thread:${chosen.id.slice(0, 8)}]]`;
-          transformed = transformed.replace(marker, replacement);
-          hadThreadAction = true;
-          notes.push(`Resolved @@${query || ""} -> ${chosen.id.slice(0, 8)}`);
-        }
-
-        if (atMarkers.length > MAX_REFERENCES_PER_PROMPT) {
-          notes.push(`Only first ${MAX_REFERENCES_PER_PROMPT} @@ references were processed.`);
-        }
-      }
-    }
-
-    const matches = [...transformed.matchAll(/\[\[thread:([^\]]+)\]\]/gi)];
+    // Find all @@id patterns (not preceded by word char)
+    const matches = [...transformed.matchAll(/(?<![a-zA-Z0-9])@@([a-zA-Z0-9_-]+)/g)];
     if (matches.length === 0) {
-      if (hadThreadAction) showTransientBadge("THREAD TOKEN READY");
-      if (notes.length > 0) ctx.ui.notify(notes.join(" | "), "info");
-      return { action: "transform", text: transformed };
+      return { action: "continue" as const };
     }
 
-    const uniqueTokens = Array.from(new Set(matches.map((m) => (m[1] || "").trim()))).slice(
-      0,
-      MAX_REFERENCES_PER_PROMPT,
-    );
-
+    const uniqueTokens = Array.from(new Set(matches.map((m) => m[1]))).slice(0, MAX_REFERENCES_PER_PROMPT);
     const currentSessionPath = ctx.sessionManager.getSessionFile();
     const sessions = await listSessions(currentSessionPath);
 
     for (const token of uniqueTokens) {
-      const placeholder = `[[thread:${token}]]`;
-      const resolved = resolveToken(token, sessions);
+      const resolved = resolveThreadToken(token, sessions);
 
       if (!resolved.session) {
-        notes.push(`Skipped ${placeholder}: ${resolved.error || "unknown error"}`);
+        notes.push(`@@${token}: ${resolved.error || "not found"}`);
         continue;
       }
 
-      const block = buildReferenceBlock(resolved.session);
-      const replacement = `\n\n${block}\n\n`;
-      transformed = transformed.split(placeholder).join(replacement);
-      hadThreadAction = true;
-      notes.push(`Expanded ${placeholder} -> ${resolved.session.id.slice(0, 8)}`);
+      const block = buildThreadContextBlock(resolved.session);
+      const pattern = new RegExp(`(?<![a-zA-Z0-9])@@${token}\\b`, "g");
+      transformed = transformed.replace(pattern, `\n\n${block}\n\n`);
+      notes.push(`@@${token} → ${resolved.session.id.slice(0, 8)}`);
     }
 
     if (matches.length > MAX_REFERENCES_PER_PROMPT) {
-      notes.push(`Only first ${MAX_REFERENCES_PER_PROMPT} thread references were expanded.`);
+      notes.push(`Only first ${MAX_REFERENCES_PER_PROMPT} thread references expanded.`);
     }
-
-    if (hadThreadAction) showTransientBadge("THREAD CONTEXT ATTACHED");
 
     if (notes.length > 0) {
       ctx.ui.notify(notes.join(" | "), "info");
     }
 
-    return { action: "transform", text: transformed };
+    return { action: "transform" as const, text: transformed };
+  });
+
+  // /files:ignore
+  pi.registerCommand("files:ignore", {
+    description: "Add a file or directory to .pi-ignore",
+    handler: async (args, ctx) => {
+      const raw = (args || "").trim();
+      if (!raw) {
+        ctx.ui.notify("Usage: /files:ignore <path>", "warning");
+        return;
+      }
+
+      const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
+      const absolute = path.resolve(ctx.cwd, cleaned);
+
+      if (!isWithinDir(absolute, ctx.cwd)) {
+        ctx.ui.notify("Path must be inside the current session directory", "warning");
+        return;
+      }
+
+      let info: Awaited<ReturnType<typeof stat>>;
+      try {
+        info = await stat(absolute);
+      } catch {
+        ctx.ui.notify(`Path not found: ${cleaned}`, "warning");
+        return;
+      }
+
+      if (!info.isFile() && !info.isDirectory()) {
+        ctx.ui.notify("Only files and directories can be ignored", "warning");
+        return;
+      }
+
+      const result = await appendIgnoreEntry(ctx.cwd, absolute, info.isDirectory());
+
+      if (result.duplicate) {
+        ctx.ui.notify(`Already ignored`, "info");
+        return;
+      }
+
+      const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+      ctx.ui.notify(`${result.created ? "Created" : "Updated"} ${location}: ${result.entry}`, "info");
+    },
+  });
+
+  // /files:unignore
+  pi.registerCommand("files:unignore", {
+    description: "Remove a file or directory from .pi-ignore",
+    handler: async (args, ctx) => {
+      const raw = (args || "").trim();
+      if (!raw) {
+        ctx.ui.notify("Usage: /files:unignore <path>", "warning");
+        return;
+      }
+
+      const cleaned = raw.replace(/^@/, "").trim().replace(/\/$/, "");
+      const absolute = path.resolve(ctx.cwd, cleaned);
+
+      if (!isWithinDir(absolute, ctx.cwd)) {
+        ctx.ui.notify("Path must be inside the current session directory", "warning");
+        return;
+      }
+
+      const result = await removeIgnoreEntryByPath(ctx.cwd, absolute);
+      if (!result.removed || !result.ignoreFile || !result.entry) {
+        ctx.ui.notify(`No ignore entry found for: ${cleaned}`, "warning");
+        return;
+      }
+
+      const location = path.relative(ctx.cwd, result.ignoreFile) || FILE_PICKER_IGNORE_FILE;
+      ctx.ui.notify(`Removed ${result.entry} from ${location}`, "info");
+    },
   });
 }

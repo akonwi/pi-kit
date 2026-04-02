@@ -8,7 +8,7 @@
 
 import { rm } from "node:fs/promises";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { listSessions, showTransientBadge, threadTitle, type SessionInfoLite } from "./thread-references";
+import { listSessions, threadTitle, type SessionInfoLite } from "./thread-references";
 
 // --- Helpers ---
 
@@ -49,7 +49,7 @@ async function pickSession(
 
 export default function sessionCommandsExtension(pi: ExtensionAPI): void {
   pi.registerCommand("threads", {
-    description: "List other sessions and insert a [[thread:<id>]] reference",
+    description: "Browse threads and insert a thread reference (@@id)",
     handler: async (args, ctx) => {
       const query = String(args || "").trim();
       const currentPath = ctx.sessionManager.getSessionFile();
@@ -67,9 +67,8 @@ export default function sessionCommandsExtension(pi: ExtensionAPI): void {
       const chosen = await pickSession(ctx, "Insert thread reference", filtered);
       if (!chosen) return;
 
-      const token = `[[thread:${chosen.id.slice(0, 8)}]]`;
+      const token = `@@${chosen.id.slice(0, 8)}`;
       ctx.ui.pasteToEditor(`${token} `);
-      showTransientBadge("THREAD INSERTED");
       ctx.ui.notify(`Inserted ${token}`, "info");
     },
   });
@@ -95,7 +94,6 @@ export default function sessionCommandsExtension(pi: ExtensionAPI): void {
       const result = await ctx.switchSession(chosen.path);
       if (result.cancelled) return;
 
-      showTransientBadge("THREAD SWITCHED");
       ctx.ui.notify(`Switched to ${threadTitle(chosen)} (${chosen.id.slice(0, 8)})`, "info");
     },
   });

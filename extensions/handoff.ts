@@ -9,7 +9,6 @@ import { rm } from "node:fs/promises";
 import { SessionManager, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { readConfig } from "./notifications";
-import { showTransientBadge } from "./thread-references";
 import { messageText } from "./session-naming";
 
 // --- Helpers ---
