@@ -1,18 +1,13 @@
 /**
  * wizard extension — guided questions tool and /wizard command.
  *
- * Provides a structured questionnaire UI for collecting multiple
- * clarifying answers from the user.
+ * Provides a structured questionnaire for collecting multiple
+ * clarifying answers. Uses Pi's native UI primitives.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { openWizardScreen } from "./ui/screens/wizard-screen";
-import { normalizeQuestion, type GuidedQuestion, type GuidedQuestionnaireInput } from "./ui/input-surfaces/wizard-input";
-import { setActiveEditorRenderDelegate } from "./ui/thread-reference-shell";
-import { sharedInteractionDock, sharedScreenManager } from "./ui/shell";
-import { createThreadScreen } from "./ui/screens/thread-screen";
 
 const GUIDED_QUESTIONS_POLICY = [
   "When you need clarification from the user and there are 2 or more missing inputs, call guided_questions instead of asking a long list in plain chat.",
@@ -21,7 +16,37 @@ const GUIDED_QUESTIONS_POLICY = [
   "After guided_questions returns, proceed using details.answers as source-of-truth.",
 ].join("\n");
 
+// --- Types ---
+
+export type GuidedQuestion = {
+  id: string;
+  kind: "text" | "select" | "boolean";
+  label: string;
+  help?: string;
+  placeholder?: string;
+  required: boolean;
+  options?: string[];
+};
+
+export type GuidedQuestionnaireInput = {
+  title?: string;
+  intro?: string;
+  questions: GuidedQuestion[];
+};
+
 // --- Helpers ---
+
+function normalizeQuestion(q: Partial<GuidedQuestion>): GuidedQuestion {
+  return {
+    id: q.id || `q${Date.now()}`,
+    kind: q.kind === "select" || q.kind === "boolean" ? q.kind : "text",
+    label: q.label || "Question",
+    help: q.help,
+    placeholder: q.placeholder,
+    required: q.required !== false,
+    options: q.options,
+  };
+}
 
 function messageText(msg: AgentMessage): string {
   const content: unknown = (msg as { content?: unknown }).content;
@@ -107,14 +132,39 @@ function buildWizardFromLastAssistant(ctx: any): GuidedQuestionnaireInput | null
 
   return {
     title: "Clarify missing details",
-    intro: "Answer the assistant's pending questions using the wizard.",
+    intro: "Answer the assistant's pending questions.",
     questions,
   };
 }
 
-// --- Main ---
+async function askQuestion(
+  ctx: any,
+  question: GuidedQuestion,
+): Promise<{ value: unknown; cancelled: boolean }> {
+  const title = question.help ? `${question.label}\n\n${question.help}` : question.label;
 
-export async function runGuidedQuestionnaire(
+  if (question.kind === "boolean") {
+    const choice = await ctx.ui.select(title, ["Yes", "No", "(skip)"]);
+    if (choice === undefined) return { value: undefined, cancelled: true };
+    if (choice === "(skip)") return { value: undefined, cancelled: false };
+    return { value: choice === "Yes", cancelled: false };
+  }
+
+  if (question.kind === "select" && question.options?.length) {
+    const options = question.required ? question.options : [...question.options!, "(skip)"];
+    const choice = await ctx.ui.select(title, options);
+    if (choice === undefined) return { value: undefined, cancelled: true };
+    if (choice === "(skip)") return { value: undefined, cancelled: false };
+    return { value: choice, cancelled: false };
+  }
+
+  // Text input
+  const answer = await ctx.ui.input(title, question.placeholder);
+  if (answer === undefined) return { value: undefined, cancelled: true };
+  return { value: answer || undefined, cancelled: false };
+}
+
+async function runGuidedQuestionnaire(
   ctx: any,
   params: GuidedQuestionnaireInput,
 ): Promise<{
@@ -136,27 +186,33 @@ export async function runGuidedQuestionnaire(
     };
   }
 
-  const dockController = sharedInteractionDock;
-  const screenManager = sharedScreenManager;
-
-  const { screen, result } = openWizardScreen({
-    ctx,
-    params: { ...params, questions },
-    dock: dockController,
-    setRenderDelegate: setActiveEditorRenderDelegate,
-    onClosed: () => {
-      screenManager.clearIfActive(screen);
-      screenManager.activate(createThreadScreen(dockController));
-    },
-  });
-  screenManager.activate(screen);
-
-  const wizardResult = await result;
-
   const title = typeof params.title === "string" && params.title.trim() ? params.title.trim() : "Guided questionnaire";
-  const answers = wizardResult.answers;
 
-  if (wizardResult.cancelled) {
+  // Show intro if provided
+  if (params.intro) {
+    ctx.ui.notify(params.intro, "info");
+  }
+
+  const answers: Record<string, unknown> = {};
+  let cancelled = false;
+
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    const prefix = `[${i + 1}/${questions.length}] `;
+    const labeledQuestion: GuidedQuestion = {
+      ...q,
+      label: `${prefix}${q.label}`,
+    };
+
+    const result = await askQuestion(ctx, labeledQuestion);
+    if (result.cancelled) {
+      cancelled = true;
+      break;
+    }
+    answers[q.id] = result.value;
+  }
+
+  if (cancelled) {
     return {
       contentText: "Questionnaire cancelled.",
       details: {
@@ -185,6 +241,8 @@ export async function runGuidedQuestionnaire(
     },
   };
 }
+
+// --- Extension factory ---
 
 export default function wizardExtension(pi: ExtensionAPI): void {
   // Inject guided_questions policy into system prompt when tool is active

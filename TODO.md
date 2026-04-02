@@ -4,8 +4,113 @@
 
 - **Phase 1: Re-enable foundations** ✅ COMPLETE
 - **Phase 2: Modular extraction** ✅ COMPLETE
-- **Phase 3: Selective v2 ports** — Not started
-- **Phase 4: Polish** — Not started
+- **Phase 3: Revert custom UI overlay** ✅ COMPLETE
+- **Phase 4: Selective v2 ports** — Not started
+- **Phase 5: Polish** — Not started
+
+---
+
+## Phase 3 Complete (2024-04-02)
+
+Removed custom UI overlay system and migrated to Pi's native UI primitives:
+
+### Removed
+
+- `ui/shell.ts` - ScreenManager, InteractionDockController
+- `ui/thread-reference-shell.ts` - custom editor installation
+- `ui/input-surfaces/text-composer.ts` - custom composer
+- `ui/input-surfaces/wizard-input.ts` - wizard input surface
+- `ui/picker-overlay.ts` - anchored picker overlay
+- `ui/screens/filter-picker-screen.ts` - custom picker screen
+- `ui/screens/pager-screen.ts` - custom pager screen
+- `ui/screens/text-input-screen.ts` - custom text input
+- `ui/screens/thread-screen.ts` - custom thread screen
+- `ui/screens/wizard-screen.ts` - custom wizard screen
+
+### Migrated
+
+- **session-commands.ts**: Now uses `ctx.ui.select()` and `ctx.ui.input()` for pickers
+- **wizard.ts**: Now uses `ctx.ui.select()` and `ctx.ui.input()` for questions
+- **pager/index.ts**: Simplified to use `ctx.ui.editor()` for display
+- **pi-kit.ts**: Removed all custom UI wiring
+
+### Result
+
+The extension now uses Pi's native UI:
+- `ctx.ui.select()` for thread picker
+- `ctx.ui.input()` for text input (rename)
+- `ctx.ui.confirm()` for confirmations (delete)
+- `ctx.ui.editor()` for multi-line display (pager)
+- `ctx.ui.notify()` for notifications
+
+---
+
+The extension currently imposes a custom UI design language on top of Pi:
+
+### What to remove
+
+1. **Custom editor replacement** (`TextComposerSurface`)
+   - `ui/input-surfaces/text-composer.ts` - replaces native editor
+   - `ui/thread-reference-shell.ts` - installs custom editor via `ctx.ui.setEditorComponent()`
+   - Custom @file picker, /command picker, [[thread:]] picker overlays
+
+2. **Custom screen management**
+   - `ui/shell.ts` - `ScreenManager`, `InteractionDockController`
+   - `ui/screens/filter-picker-screen.ts` - custom picker screen
+   - `ui/screens/pager-screen.ts` - custom pager screen
+   - `ui/screens/text-input-screen.ts` - custom text input
+   - `ui/screens/thread-screen.ts` - custom thread screen
+   - `ui/screens/wizard-screen.ts` - custom wizard screen
+
+3. **Custom overlays**
+   - `ui/picker-overlay.ts` - anchored picker overlay
+   - `ui/input-surfaces/wizard-input.ts` - wizard input surface
+
+### What to keep
+
+- All commands (`/bells`, `/speech`, `/threads`, `/switch`, `/threads:manage`, `/handoff`, `/pager`, `/wizard`)
+- All tools (`guided_questions`)
+- Footer/status customization
+- Notification bells/speech
+- Session naming
+- Handoff logic
+- Thread reference expansion logic
+
+### Migration approach
+
+Use Pi's native UI primitives:
+
+- `ctx.ui.select()` - for pickers (threads, files, commands)
+- `ctx.ui.input()` - for text input
+- `ctx.ui.confirm()` - for confirmations
+- `ctx.ui.editor()` - for multi-line editing
+- `ctx.ui.custom()` - for complex custom components (if needed)
+- `ctx.ui.notify()` - for notifications
+
+### Key changes
+
+1. **Remove `ctx.ui.setEditorComponent()` call** - keep Pi's native editor
+2. **Remove `ScreenManager` and `InteractionDockController`** - Pi manages its own screens
+3. **Replace custom pickers with native `select()`**:
+   - Thread picker for `/threads`, `/switch`, `/threads:manage`
+   - File picker would need alternative approach (native @ picker is built-in)
+4. **Simplify pager to use `ctx.ui.custom()` or `ctx.ui.editor()`**
+5. **Simplify wizard to use `ctx.ui.custom()` or native dialogs**
+
+### Files to delete after migration
+
+```
+extensions/ui/input-surfaces/text-composer.ts
+extensions/ui/input-surfaces/wizard-input.ts
+extensions/ui/picker-overlay.ts
+extensions/ui/screens/filter-picker-screen.ts
+extensions/ui/screens/pager-screen.ts
+extensions/ui/screens/text-input-screen.ts
+extensions/ui/screens/thread-screen.ts
+extensions/ui/screens/wizard-screen.ts
+extensions/ui/shell.ts
+extensions/ui/thread-reference-shell.ts
+```
 
 ## Recent Changes
 
