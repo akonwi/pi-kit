@@ -1,19 +1,19 @@
 /**
  * Thread-aware autocomplete provider and editor.
  *
- * Extends Pi's CombinedAutocompleteProvider to add @@ thread completion
- * alongside native @ file completion and / command completion.
+ * Wraps Pi's CombinedAutocompleteProvider to add @@ thread completion
+ * alongside native @ file and / command completion.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { CombinedAutocompleteProvider, type AutocompleteItem, type AutocompleteSuggestions } from "@mariozechner/pi-tui";
+import type { AutocompleteItem, AutocompleteSuggestions } from "@mariozechner/pi-tui";
 import type { KeybindingsManager, TUI } from "@mariozechner/pi-tui";
 import { listSessions, threadTitle, type SessionInfoLite } from "./thread-references";
 
 // --- Thread autocomplete component ---
 
-export class ThreadAutocompleteComponent {
+class ThreadAutocompleteComponent {
   private sessions: SessionInfoLite[] = [];
   private basePath: string;
   private loaded = false;
@@ -33,10 +33,6 @@ export class ThreadAutocompleteComponent {
     this.sessions = [];
   }
 
-  /**
-   * Extract @@ prefix from text before cursor.
-   * Returns the prefix including @@, or null if not found.
-   */
   extractThreadPrefix(text: string): string | null {
     // Match @@ at word boundary (start of line or after whitespace)
     const match = text.match(/(?:^|[\s])@@([^\s]*)$/);
@@ -66,7 +62,7 @@ export class ThreadAutocompleteComponent {
 
     await this.ensureLoaded();
 
-    const query = threadPrefix.slice(2).toLowerCase(); // Remove @@
+    const query = threadPrefix.slice(2).toLowerCase();
     const matches = this.sessions
       .filter((s) => {
         if (!query) return true;
@@ -110,25 +106,19 @@ export class ThreadAutocompleteComponent {
   }
 }
 
-// --- Combined provider with thread support ---
+// --- Wrapper provider that adds thread support ---
 
-export class ThreadAwareAutocompleteProvider implements AutocompleteProvider {
-  private baseProvider: CombinedAutocompleteProvider | null = null;
+class ThreadAwareAutocompleteProvider implements AutocompleteProvider {
+  private baseProvider: AutocompleteProvider | null = null;
   private threadComponent: ThreadAutocompleteComponent;
 
-  constructor(
-    slashCommands: Array<{ name: string; description?: string; getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null }>,
-    basePath: string,
-    fdPath: string | null = null,
-  ) {
-    this.baseProvider = new CombinedAutocompleteProvider(slashCommands, basePath, fdPath);
+  constructor(baseProvider: AutocompleteProvider | null, basePath: string) {
+    this.baseProvider = baseProvider;
     this.threadComponent = new ThreadAutocompleteComponent(basePath);
   }
 
-  setSlashCommands(commands: Array<{ name: string; description?: string }>): void {
-    if (this.baseProvider) {
-      (this.baseProvider as any).commands = commands;
-    }
+  setBaseProvider(provider: AutocompleteProvider): void {
+    this.baseProvider = provider;
   }
 
   invalidateThreadIndex(): void {
@@ -151,11 +141,7 @@ export class ThreadAwareAutocompleteProvider implements AutocompleteProvider {
     }
 
     // Delegate to base provider for @ and /
-    if (this.baseProvider) {
-      return this.baseProvider.getSuggestions(lines, cursorLine, cursorCol, options);
-    }
-
-    return null;
+    return this.baseProvider?.getSuggestions(lines, cursorLine, cursorCol, options) ?? null;
   }
 
   applyCompletion(
@@ -170,38 +156,56 @@ export class ThreadAwareAutocompleteProvider implements AutocompleteProvider {
       return this.threadComponent.applyThreadCompletion(lines, cursorLine, cursorCol, item, prefix);
     }
 
-    // Delegate to base provider
-    if (this.baseProvider) {
-      return this.baseProvider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
-    }
-
-    // Fallback
-    const currentLine = lines[cursorLine] || "";
-    const before = currentLine.slice(0, cursorCol - prefix.length);
-    const after = currentLine.slice(cursorCol);
-    const newLines = [...lines];
-    newLines[cursorLine] = `${before}${item.value} ${after}`;
-    return { lines: newLines, cursorLine, cursorCol: before.length + item.value.length + 1 };
+    return this.baseProvider?.applyCompletion(lines, cursorLine, cursorCol, item, prefix) ?? 
+      { lines, cursorLine, cursorCol };
   }
 }
 
-// --- Editor factory ---
+// --- Thread-aware editor that wraps Pi's autocomplete ---
+
+let threadProvider: ThreadAwareAutocompleteProvider | null = null;
+
+export class ThreadAwareEditor extends CustomEditor {
+  private threadAutocompleteProvider: ThreadAwareAutocompleteProvider;
+
+  constructor(
+    tui: TUI,
+    theme: any,
+    keybindings: KeybindingsManager,
+    threadProvider: ThreadAwareAutocompleteProvider,
+    options?: { paddingX?: number; autocompleteMaxVisible?: number },
+  ) {
+    super(tui, theme, keybindings, options);
+    this.threadAutocompleteProvider = threadProvider;
+    // Don't set autocomplete here - Pi will call setAutocompleteProvider later
+  }
+
+  /**
+   * Override to wrap Pi's autocomplete provider with thread support.
+   * Pi calls this after creating the editor.
+   */
+  override setAutocompleteProvider(provider: AutocompleteProvider | null): void {
+    // Wrap Pi's provider (commands + files) with our thread support
+    this.threadAutocompleteProvider.setBaseProvider(provider);
+    super.setAutocompleteProvider(this.threadAutocompleteProvider);
+  }
+}
 
 export function createThreadAwareEditor(
   tui: TUI,
   theme: any,
   keybindings: KeybindingsManager,
-  slashCommands: Array<{ name: string; description?: string }>,
   basePath: string,
-): CustomEditor {
-  const provider = new ThreadAwareAutocompleteProvider(slashCommands, basePath, null);
+): ThreadAwareEditor {
+  // Create the thread provider - base will be set when Pi calls setAutocompleteProvider
+  threadProvider = new ThreadAwareAutocompleteProvider(null, basePath);
   
-  const editor = new CustomEditor(tui, theme, keybindings, {
+  return new ThreadAwareEditor(tui, theme, keybindings, threadProvider, {
     paddingX: 1,
     autocompleteMaxVisible: 8,
   });
-  
-  editor.setAutocompleteProvider(provider);
-  
-  return editor;
+}
+
+export function invalidateThreadIndex(): void {
+  threadProvider?.invalidateThreadIndex();
 }

@@ -6,47 +6,24 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { ThreadAwareAutocompleteProvider, createThreadAwareEditor } from "./thread-editor";
-
-// Global provider for thread index invalidation
-let threadAutocompleteProvider: ThreadAwareAutocompleteProvider | null = null;
-
-export function invalidateThreadEditorIndex(): void {
-  threadAutocompleteProvider?.invalidateThreadIndex();
-}
+import { createThreadAwareEditor, invalidateThreadIndex } from "./thread-editor";
 
 export default function threadEditorExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
 
-    // Get slash commands from Pi
-    const commands = pi.getCommands();
-    const slashCommands = commands.map((c) => ({
-      name: c.name,
-      description: c.description,
-    }));
-
-    // Create thread-aware autocomplete provider with slash commands
-    const provider = new ThreadAwareAutocompleteProvider(
-      slashCommands,
-      ctx.cwd,
-      null, // fdPath - let CombinedAutocompleteProvider handle it
-    );
-    threadAutocompleteProvider = provider;
-
-    // Install custom editor with our provider
+    // Install custom editor that wraps autocomplete with thread support
     ctx.ui.setEditorComponent((tui: any, theme: any, keybindings: any) => {
-      const editor = createThreadAwareEditor(tui, theme, keybindings, slashCommands, ctx.cwd);
-      return editor;
+      return createThreadAwareEditor(tui, theme, keybindings, ctx.cwd);
     });
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     // Invalidate thread index on session switch
-    threadAutocompleteProvider?.invalidateThreadIndex();
+    invalidateThreadIndex();
   });
 
   pi.events.on("thread-reference:index-refresh", () => {
-    threadAutocompleteProvider?.invalidateThreadIndex();
+    invalidateThreadIndex();
   });
 }
