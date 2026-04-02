@@ -85,6 +85,7 @@ class PagerComponent implements Focusable {
   private renderedLines: string[] = [];
   private viewportHeight = 0;
   private showHelp = false;
+  private currentSection = 0;
 
   constructor(
     private theme: Theme,
@@ -139,15 +140,35 @@ class PagerComponent implements Focusable {
       return;
     }
 
-    // Page up (previous page)
-    if (matchesKey(data, "pageup") || matchesKey(data, "b") || matchesKey(data, "h")) {
+    // Page up
+    if (matchesKey(data, "pageup") || matchesKey(data, "b")) {
       this.scrollOffset = Math.max(0, this.scrollOffset - this.viewportHeight);
       return;
     }
 
-    // Page down (next page)
-    if (matchesKey(data, "pagedown") || matchesKey(data, "f") || matchesKey(data, "l")) {
+    // Page down
+    if (matchesKey(data, "pagedown") || matchesKey(data, "f")) {
       this.scrollOffset = Math.min(this.renderedLines.length - this.viewportHeight, this.scrollOffset + this.viewportHeight);
+      return;
+    }
+
+    // Previous section (h)
+    if (matchesKey(data, "h") && this.sections.length > 0) {
+      this.currentSection = Math.max(0, this.currentSection - 1);
+      const section = this.sections[this.currentSection];
+      if (section) {
+        this.scrollOffset = Math.max(0, section.line);
+      }
+      return;
+    }
+
+    // Next section (l)
+    if (matchesKey(data, "l") && this.sections.length > 0) {
+      this.currentSection = Math.min(this.sections.length - 1, this.currentSection + 1);
+      const section = this.sections[this.currentSection];
+      if (section) {
+        this.scrollOffset = Math.max(0, section.line);
+      }
       return;
     }
 
@@ -166,7 +187,8 @@ class PagerComponent implements Focusable {
     // Jump to section by number
     const num = parseInt(data, 10);
     if (num >= 1 && num <= this.sections.length) {
-      const section = this.sections[num - 1];
+      this.currentSection = num - 1;
+      const section = this.sections[this.currentSection];
       if (section) {
         this.scrollOffset = Math.max(0, section.line);
       }
@@ -227,7 +249,7 @@ class PagerComponent implements Focusable {
 
       // Footer with controls
       const position = `${this.scrollOffset + 1}/${this.renderedLines.length}`;
-      const controls = "↑↓/jk scroll • h/l prev/next page • g/G top/bot • 1-9 section • ? help • q quit";
+      const controls = "↑↓/jk scroll • h/l prev/next section • g/G top/bot • 1-9 jump • ? help • q quit";
       const controlsLine = th.fg("dim", controls);
       const controlsPad = Math.max(0, innerWidth - visibleWidth(controlsLine) - visibleWidth(position) - 1);
       lines.push(`${border}${controlsLine}${" ".repeat(controlsPad)} ${th.fg("dim", position)}${border}`);
@@ -238,9 +260,10 @@ class PagerComponent implements Focusable {
         " Navigation:",
         "  ↑/k     Scroll up one line",
         "  ↓/j     Scroll down one line",
-        "  h       Previous page",
-        "  l       Next page",
-        "  b/f     Page up/down (alternate)",
+        "  h       Previous section",
+        "  l       Next section",
+        "  b       Page up",
+        "  f       Page down",
         "  g       Go to top",
         "  G       Go to bottom",
         "  1-9     Jump to section",
