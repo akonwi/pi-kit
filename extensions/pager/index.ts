@@ -181,8 +181,12 @@ class PagerComponent implements Focusable {
   }
 
   render(width: number): string[] {
-    // Render markdown content
-    this.renderedLines = this.markdown.render(width);
+    const th = this.theme;
+    const border = th.fg("border", "│");
+    const innerWidth = width - 2;
+
+    // Render markdown content at inner width
+    this.renderedLines = this.markdown.render(innerWidth);
 
     // Calculate viewport height (leave room for header/footer)
     this.viewportHeight = process.stdout.rows ? process.stdout.rows - 4 : 20;
@@ -191,9 +195,6 @@ class PagerComponent implements Focusable {
     this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, this.renderedLines.length - this.viewportHeight)));
 
     const lines: string[] = [];
-    const th = this.theme;
-    const border = th.fg("border", "│");
-    const innerWidth = width - 2;
 
     // Header
     const headerText = this.showHelp ? " Pager Help " : ` Pager: ${this.title} `;
@@ -206,13 +207,16 @@ class PagerComponent implements Focusable {
       if (this.sections.length > 1) {
         const sectionHint = this.sections.slice(0, 5).map((s, i) => `${i + 1}:${clip(s.title, 15)}`).join(" ");
         const moreCount = this.sections.length > 5 ? ` +${this.sections.length - 5}` : "";
-        lines.push(`${border}${th.fg("dim", `Sections: ${sectionHint}${moreCount}`.padEnd(innerWidth))}${border}`);
+        const sectionLine = th.fg("dim", `Sections: ${sectionHint}${moreCount}`);
+        const sectionLinePad = Math.max(0, innerWidth - visibleWidth(sectionLine));
+        lines.push(`${border}${sectionLine}${" ".repeat(sectionLinePad)}${border}`);
       }
 
       // Content with scroll
       const visibleLines = this.renderedLines.slice(this.scrollOffset, this.scrollOffset + this.viewportHeight - 3);
       for (const line of visibleLines) {
-        lines.push(`${border}${line.padEnd(innerWidth)}${border}`);
+        const linePad = Math.max(0, innerWidth - visibleWidth(line));
+        lines.push(`${border}${line}${" ".repeat(linePad)}${border}`);
       }
 
       // Fill remaining space
@@ -224,7 +228,9 @@ class PagerComponent implements Focusable {
       // Footer with controls
       const position = `${this.scrollOffset + 1}/${this.renderedLines.length}`;
       const controls = "↑↓/jk scroll • f/b page • g/G top/bot • 1-9 section • h help • q quit";
-      lines.push(`${border}${th.fg("dim", controls.padEnd(innerWidth - visibleWidth(position) - 1))} ${th.fg("dim", position)}${border}`);
+      const controlsLine = th.fg("dim", controls);
+      const controlsPad = Math.max(0, innerWidth - visibleWidth(controlsLine) - visibleWidth(position) - 1);
+      lines.push(`${border}${controlsLine}${" ".repeat(controlsPad)} ${th.fg("dim", position)}${border}`);
     } else {
       // Help screen
       const helpLines = [
@@ -247,7 +253,9 @@ class PagerComponent implements Focusable {
         "",
       ];
       for (const line of helpLines) {
-        lines.push(`${border}${th.fg("text", line.padEnd(innerWidth))}${border}`);
+        const styledLine = th.fg("text", line);
+        const linePad = Math.max(0, innerWidth - visibleWidth(styledLine));
+        lines.push(`${border}${styledLine}${" ".repeat(linePad)}${border}`);
       }
     }
 
