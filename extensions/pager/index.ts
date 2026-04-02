@@ -6,9 +6,10 @@
  * for current section. Ctrl+Enter submits all notes as feedback.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Editor, Markdown, type Focusable, matchesKey, visibleWidth } from "@mariozechner/pi-tui";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { splitSections } from "./split-sections";
 
 const LONGFORM_MIN_CHARS = 100;
@@ -420,9 +421,66 @@ class PagerComponent implements Focusable {
   dispose(): void {}
 }
 
+// --- Shared open function ---
+
+async function openPager(
+  ctx: ExtensionContext,
+  sections: { title: string; body: string }[],
+  title: string,
+  pi: ExtensionAPI,
+): Promise<void> {
+  const notes = new Map<number, string>();
+  await ctx.ui.custom<undefined>(
+    (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
+      new PagerComponent(
+        theme,
+        title,
+        sections,
+        0,
+        notes,
+        done,
+        (message: string) => pi.sendUserMessage(message),
+        tui,
+      ),
+    { overlay: true },
+  );
+}
+
 // --- Extension factory ---
 
 export default function pagerExtension(pi: ExtensionAPI): void {
+  // Tool: agent can proactively open the pager with its own content
+  pi.registerTool({
+    name: "pager",
+    label: "Pager",
+    description: "Display a long markdown response in a pager UI with section navigation and per-section note-taking. Use this instead of outputting long responses as plain text.",
+    promptSnippet: "pager(content, title?) — present long markdown content in an interactive pager",
+    parameters: Type.Object({
+      content: Type.String({ description: "Markdown content to display" }),
+      title: Type.Optional(Type.String({ description: "Title shown in the pager header" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!ctx.hasUI) {
+        return { content: [{ type: "text", text: params.content }] };
+      }
+
+      const sections = splitSections(params.content);
+      if (sections.length === 0) {
+        return { content: [{ type: "text", text: params.content }] };
+      }
+
+      const title = params.title || clip(sections[0].title, 50);
+      const mapped = sections.map(s => ({
+        title: s.sectionTitle ? `${s.sectionTitle}: ${s.title}` : s.title,
+        body: s.body.trim(),
+      }));
+
+      await openPager(ctx, mapped, title, pi);
+      return { content: [{ type: "text", text: `Displayed in pager (${sections.length} section${sections.length === 1 ? "" : "s"})` }] };
+    },
+  });
+
+  // Command: user can manually open pager for last assistant response
   pi.registerCommand("pager", {
     description: "Page through last assistant response with notes",
     handler: async (_args, ctx: ExtensionCommandContext) => {
@@ -431,32 +489,11 @@ export default function pagerExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("No long assistant response found to paginate.", "warning");
         return;
       }
-
       if (result.sections.length === 0) {
         ctx.ui.notify("No sections found in response.", "warning");
         return;
       }
-
-      const notes = new Map<number, string>();
-
-      await ctx.ui.custom<undefined>(
-        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) => {
-          return new PagerComponent(
-            theme,
-            result.title,
-            result.sections,
-            0,
-            notes,
-            done,
-            (message: string) => {
-              // Submit feedback message
-              pi.sendUserMessage(message);
-            },
-            tui,
-          );
-        },
-        { overlay: true },
-      );
+      await openPager(ctx, result.sections, result.title, pi);
     },
   });
 }
