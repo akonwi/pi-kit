@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export type NotificationConfig = {
   bells: {
@@ -171,9 +172,44 @@ function parseToggleArg(
 
 // --- Extension factory ---
 
+function lastAssistantText(messages: AgentMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    const content: unknown = (msg as { content?: unknown }).content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((p) => (p && typeof p === "object" && (p as any).type === "text" ? (p as any).text : ""))
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    }
+  }
+  return "";
+}
+
 export default function notificationsExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async () => {
     await ensureConfigFile();
+  });
+
+  pi.on("agent_end", async (event, ctx) => {
+    const config = await readConfig();
+
+    const text = lastAssistantText(event.messages);
+
+    if (config.bells.enabled) {
+      writeBell();
+    }
+
+    if (config.speech.enabled && text && process.platform === "darwin") {
+      const spoken = shortenForSpeech(text, config.speech.maxChars);
+      if (spoken) {
+        const args = config.speech.voice ? ["-v", config.speech.voice, spoken] : [spoken];
+        await runCommand(pi, "say", args);
+      }
+    }
   });
 
   pi.registerCommand("bells", {
