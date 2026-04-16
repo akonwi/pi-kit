@@ -9,10 +9,9 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Editor, Markdown, type Focusable, matchesKey, visibleWidth } from "@mariozechner/pi-tui";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { splitSections } from "./split-sections";
 
-const LONGFORM_MIN_CHARS = 100;
+const LONGFORM_MIN_CHARS = 500;
 
 // --- Helpers ---
 
@@ -37,32 +36,38 @@ function messageText(msg: AgentMessage): string {
     .trim();
 }
 
-function buildSectionsFromLastAssistant(ctx: ExtensionCommandContext): { title: string; sections: { title: string; body: string }[] } | null {
-  const branch = Array.isArray(ctx.sessionManager?.getBranch?.()) ? ctx.sessionManager.getBranch() : [];
+function buildSectionsFromText(text: string): { title: string; sections: { title: string; body: string }[] } | null {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length < LONGFORM_MIN_CHARS) return null;
 
-  let lastAssistant: AgentMessage | undefined;
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (!entry || entry.type !== "message" || !entry.message || entry.message.role !== "assistant") continue;
-    lastAssistant = entry.message as AgentMessage;
-    break;
-  }
-
-  if (!lastAssistant) return null;
-
-  const text = messageText(lastAssistant).trim();
-  if (!text || text.length < LONGFORM_MIN_CHARS) return null;
-
-  const sections = splitSections(text);
+  const sections = splitSections(trimmed);
   if (sections.length === 0) return null;
 
   return {
     title: clip(sections[0].title, 50),
-    sections: sections.map(s => ({
+    sections: sections.map((s) => ({
       title: s.sectionTitle ? `${s.sectionTitle}: ${s.title}` : s.title,
       body: s.body.trim(),
     })),
   };
+}
+
+function findLastAssistantInBranch(ctx: ExtensionCommandContext): AgentMessage | null {
+  const branch = Array.isArray(ctx.sessionManager?.getBranch?.()) ? ctx.sessionManager.getBranch() : [];
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i];
+    if (entry?.type === "message" && entry.message?.role === "assistant") {
+      return entry.message as AgentMessage;
+    }
+  }
+  return null;
+}
+
+function findLastAssistantMessage(messages: AgentMessage[]): AgentMessage | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") return messages[i];
+  }
+  return null;
 }
 
 function formatFeedbackMessage(sections: { title: string; body: string }[], notes: Map<number, string>): string | null {
@@ -449,50 +454,42 @@ async function openPager(
 // --- Extension factory ---
 
 export default function pagerExtension(pi: ExtensionAPI): void {
-  // Tool: agent can proactively open the pager with its own content
-  pi.registerTool({
-    name: "pager",
-    label: "Pager",
-    description: "Display a long markdown response in a pager UI with section navigation and per-section note-taking. Use this instead of outputting long responses as plain text.",
-    promptSnippet: "pager(content, title?) — present long markdown content in an interactive pager",
-    parameters: Type.Object({
-      content: Type.String({ description: "Markdown content to display" }),
-      title: Type.Optional(Type.String({ description: "Title shown in the pager header" })),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!ctx.hasUI) {
-        return { content: [{ type: "text", text: params.content }] };
-      }
+  let lastAutoPagedSignature = "";
 
-      const sections = splitSections(params.content);
-      if (sections.length === 0) {
-        return { content: [{ type: "text", text: params.content }] };
-      }
+  // Automatically page long assistant responses after they land in transcript.
+  pi.on("agent_end", async (event, ctx) => {
+    if (!ctx.hasUI) return;
 
-      const title = params.title || clip(sections[0].title, 50);
-      const mapped = sections.map(s => ({
-        title: s.sectionTitle ? `${s.sectionTitle}: ${s.title}` : s.title,
-        body: s.body.trim(),
-      }));
+    const msg = findLastAssistantMessage(event.messages);
+    if (!msg) return;
 
-      await openPager(ctx, mapped, title, pi);
-      return { content: [{ type: "text", text: `Displayed in pager (${sections.length} section${sections.length === 1 ? "" : "s"})` }] };
-    },
+    const text = messageText(msg);
+    const result = buildSectionsFromText(text);
+    if (!result) return;
+
+    const signature = `${result.title}:${text.length}:${text.slice(0, 120)}`;
+    if (signature === lastAutoPagedSignature) return;
+    lastAutoPagedSignature = signature;
+
+    await openPager(ctx, result.sections, result.title, pi);
   });
 
   // Command: user can manually open pager for last assistant response
   pi.registerCommand("pager", {
     description: "Page through last assistant response with notes",
     handler: async (_args, ctx: ExtensionCommandContext) => {
-      const result = buildSectionsFromLastAssistant(ctx);
-      if (!result) {
+      const msg = findLastAssistantInBranch(ctx);
+      if (!msg) {
         ctx.ui.notify("No long assistant response found to paginate.", "warning");
         return;
       }
-      if (result.sections.length === 0) {
-        ctx.ui.notify("No sections found in response.", "warning");
+
+      const result = buildSectionsFromText(messageText(msg));
+      if (!result) {
+        ctx.ui.notify(`No long assistant response found (min ${LONGFORM_MIN_CHARS} chars).`, "warning");
         return;
       }
+
       await openPager(ctx, result.sections, result.title, pi);
     },
   });
