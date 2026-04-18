@@ -11,7 +11,7 @@ import { Editor, Markdown, type Focusable, matchesKey, visibleWidth } from "@mar
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { splitSections } from "./split-sections";
 
-const LONGFORM_MIN_CHARS = 500;
+const LONGFORM_MIN_CHARS = 900;
 
 // --- Helpers ---
 
