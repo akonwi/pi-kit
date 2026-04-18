@@ -471,7 +471,10 @@ export default function pagerExtension(pi: ExtensionAPI): void {
     if (signature === lastAutoPagedSignature) return;
     lastAutoPagedSignature = signature;
 
-    await openPager(ctx, result.sections, result.title, pi);
+    // Non-blocking: do not keep turn in "working" state while pager is open.
+    void openPager(ctx, result.sections, result.title, pi).catch(() => {
+      // best effort
+    });
   });
 
   // Command: user can manually open pager for last assistant response
