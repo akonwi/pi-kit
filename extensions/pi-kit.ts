@@ -16,6 +16,7 @@ import ignoreExtension from "./ignore";
 import threadReferencesExtension from "./thread-references";
 import protectedPathsExtension from "./protected-paths";
 import claudeCommandsExtension from "./claude-commands";
+import thinkingExtension from "./thinking";
 
 export default function piKitExtension(pi: ExtensionAPI): void {
   notificationsExtension(pi);
@@ -30,4 +31,5 @@ export default function piKitExtension(pi: ExtensionAPI): void {
   threadReferencesExtension(pi);
   protectedPathsExtension(pi);
   claudeCommandsExtension(pi);
+  thinkingExtension(pi);
 }
